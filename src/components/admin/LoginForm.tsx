@@ -57,7 +57,7 @@ export function LoginForm({ returnTo }: { returnTo?: string }) {
             type={showPassword ? "text" : "password"}
             autoComplete="current-password"
             required
-            minLength={8}
+            minLength={6}
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             placeholder="••••••••"

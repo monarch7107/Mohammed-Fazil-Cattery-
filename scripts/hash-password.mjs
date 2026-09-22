@@ -31,7 +31,7 @@ scrypt(
       console.error(err);
       process.exit(1);
     }
-    const hash = `scrypt$${COST}.${BLOCK_SIZE}.${PARALLELISM}$${salt.toString("hex")}$${key.toString("hex")}`;
+    const hash = `scrypt:${COST}.${BLOCK_SIZE}.${PARALLELISM}:${salt.toString("hex")}:${key.toString("hex")}`;
     console.log("\nADMIN_PASSWORD_HASH=" + hash + "\n");
     console.log("Add it to .env.local (or your hosting environment variables).\n");
   }

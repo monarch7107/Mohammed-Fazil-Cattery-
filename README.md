@@ -129,8 +129,8 @@ in-memory store seeded with clearly-labelled placeholder records.
    ```
 4. Seed content + indexes (optional — the app also auto-seeds empty collections on first read):
    ```bash
-   node scripts/hash-password.mjs "your-strong-password"   # prints ADMIN_PASSWORD_HASH
-   MONGODB_URI="..." ADMIN_EMAIL="you@example.com" ADMIN_PASSWORD_HASH="scrypt$..." node scripts/seed.mjs
+   node scripts/hash-password.mjs "your-strong-password"   # prints ADMIN_PASSWORD_HASH (scrypt:…)
+   MONGODB_URI="..." ADMIN_EMAIL="you@example.com" ADMIN_PASSWORD_HASH="scrypt:..." node scripts/seed.mjs
    ```
 
 **Collections:** `kittens`, `products`, `gallery`, `users`.
@@ -152,8 +152,9 @@ Empty/unknown fields are **never rendered** — the site shows only what actuall
 
 ## Admin setup
 
-1. Generate a hash: `node scripts/hash-password.mjs "a-strong-password"`.
-2. Either set `ADMIN_EMAIL` + `ADMIN_PASSWORD_HASH` in your environment (works even before the
+1. Generate a hash: `node scripts/hash-password.mjs "a-strong-password"` (minimum 8 chars).
+2. Either set `ADMIN_EMAIL` + `ADMIN_PASSWORD_HASH` (and optionally `OWNER_EMAIL` +
+   `OWNER_PASSWORD_HASH` for a second account) in your environment (works even before the
    database has users), or insert a document into `users` (the seed script does this for you).
 3. Set `AUTH_SECRET` (required in production): `openssl rand -hex 32`.
 4. Visit **`/admin`** → redirected to `/admin/login` → dashboard at `/admin/dashboard`.
@@ -195,6 +196,7 @@ See `env.example` for the complete, commented list. Highlights:
 | `MONGODB_URI` | Database. Unset → in-memory development store. |
 | `AUTH_SECRET` | Session cookie signing (mandatory in production). |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD_HASH` | Environment admin fallback. |
+| `OWNER_EMAIL` / `OWNER_PASSWORD_HASH` | Optional second (owner) env account. |
 | `IMAGE_STORAGE_DRIVER` | `local` \| `cloudinary`. |
 
 ## 3D cat architecture
