@@ -15,12 +15,11 @@ export type ListProductFilter = { animal?: Product["animal"]; category?: Product
 export type ListGalleryFilter = { category?: GalleryCategory };
 
 /**
- * Storage contract. The public site and the admin panel only ever talk to
- * this interface, so swapping MongoDB for another store (or running the
- * in-memory development driver) never touches a single component.
+ * Storage contract. The public site and admin panel only talk to this
+ * interface, so persistence can be switched without touching components.
  */
 export interface DataStore {
-  readonly mode: "mongo" | "memory";
+  readonly mode: "firebase" | "memory";
 
   listKittens(filter?: ListKittenFilter): Promise<Kitten[]>;
   getKitten(id: string): Promise<Kitten | null>;
