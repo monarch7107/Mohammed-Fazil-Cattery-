@@ -29,7 +29,14 @@ export function isFirebaseClientConfigured(): boolean {
 
 let clientAppPromise: Promise<import("firebase/app").FirebaseApp> | null = null;
 
-/** Lazily-initialised singleton for the (rare) client-side auth calls. */
+/**
+ * Lazily-initialised singleton for the (rare) client-side Firebase calls.
+ *
+ * The duplicate-initialisation guard works in both directions: it reuses the
+ * SDK-wide default app when something else already created one, and the
+ * module-level `clientAppPromise` cache makes every caller receive the same
+ * app instance — never a second one.
+ */
 export function getFirebaseClientApp(): Promise<import("firebase/app").FirebaseApp> {
   if (!isFirebaseClientConfigured()) {
     return Promise.reject(new Error("Firebase client configuration is missing."));
@@ -51,4 +58,23 @@ export function getFirebaseClientApp(): Promise<import("firebase/app").FirebaseA
     });
   }
   return clientAppPromise;
+}
+
+let firestorePromise: Promise<import("firebase/firestore").Firestore> | null = null;
+
+/**
+ * Client-side Firestore handle for the same singleton app.
+ *
+ * Used only for browser-side reads against the public content collections;
+ * every write still goes through the guarded Next.js API layer, and the
+ * Firestore security rules are the final gate either way.
+ */
+export function getFirebaseClientFirestore(): Promise<import("firebase/firestore").Firestore> {
+  if (!firestorePromise) {
+    firestorePromise = Promise.all([
+      getFirebaseClientApp(),
+      import("firebase/firestore"),
+    ]).then(([app, firestore]) => firestore.getFirestore(app));
+  }
+  return firestorePromise;
 }
