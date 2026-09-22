@@ -1,11 +1,6 @@
 import { cert, getApps, initializeApp, type App } from "firebase-admin/app";
 import { FieldValue, getFirestore, type Firestore, Timestamp } from "firebase-admin/firestore";
-import type {
-  AdminUser,
-  GalleryItem,
-  Kitten,
-  Product,
-} from "@/models/types";
+import type { AdminUser, GalleryItem, Kitten, Product } from "@/models/types";
 import type {
   DataStore,
   ListGalleryFilter,
@@ -22,7 +17,6 @@ function config() {
   const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
   const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n").trim();
-
   if (!projectId || !clientEmail || !privateKey) return null;
   return { projectId, clientEmail, privateKey };
 }
@@ -34,14 +28,12 @@ export function hasFirebaseConfig(): boolean {
 function getFirebaseApp(): App {
   const existing = getApps()[0];
   if (existing) return existing;
-
   const credentials = config();
   if (!credentials) {
     throw new Error(
       "Firebase is not configured. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY."
     );
   }
-
   return initializeApp({
     credential: cert(credentials),
     projectId: credentials.projectId,
@@ -49,7 +41,6 @@ function getFirebaseApp(): App {
 }
 
 let firestore: Firestore | null = null;
-
 function db(): Firestore {
   if (!firestore) firestore = getFirestore(getFirebaseApp());
   return firestore;
@@ -115,14 +106,12 @@ function mapGallery(id: string, doc: Doc): GalleryItem {
 
 async function seedIfEmpty(): Promise<void> {
   if (process.env.SEED_ON_EMPTY === "false") return;
-
   const firestoreDb = db();
   const [kittens, products, gallery] = await Promise.all([
     firestoreDb.collection("kittens").limit(1).get(),
     firestoreDb.collection("products").limit(1).get(),
     firestoreDb.collection("gallery").limit(1).get(),
   ]);
-
   if (!kittens.empty || !products.empty || !gallery.empty) return;
 
   const batch = firestoreDb.batch();
@@ -130,32 +119,23 @@ async function seedIfEmpty(): Promise<void> {
 
   for (const kitten of placeholderKittens()) {
     const ref = firestoreDb.collection("kittens").doc();
-    batch.set(ref, {
-      ...kitten,
-      id: FieldValue.delete(),
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    });
+    const { id: _id, ...record } = kitten;
+    void _id;
+    batch.set(ref, { ...record, createdAt: timestamp, updatedAt: timestamp });
   }
 
   for (const product of placeholderProducts()) {
     const ref = firestoreDb.collection("products").doc();
-    batch.set(ref, {
-      ...product,
-      id: FieldValue.delete(),
-      createdAt: timestamp,
-      updatedAt: timestamp,
-    });
+    const { id: _id, ...record } = product;
+    void _id;
+    batch.set(ref, { ...record, createdAt: timestamp, updatedAt: timestamp });
   }
 
   placeholderGallery().forEach((galleryItem, index) => {
     const ref = firestoreDb.collection("gallery").doc();
-    batch.set(ref, {
-      ...galleryItem,
-      id: FieldValue.delete(),
-      sortOrder: index,
-      createdAt: timestamp,
-    });
+    const { id: _id, ...record } = galleryItem;
+    void _id;
+    batch.set(ref, { ...record, sortOrder: index, createdAt: timestamp });
   });
 
   await batch.commit();
@@ -287,12 +267,12 @@ export const firebaseStore: DataStore = {
   },
 
   async reorderGallery(orderedIds) {
+    if (orderedIds.length === 0) return false;
     const firestoreDb = await ready();
     const batch = firestoreDb.batch();
     orderedIds.forEach((id, index) => {
       batch.update(firestoreDb.collection("gallery").doc(id), { sortOrder: index });
     });
-    if (orderedIds.length === 0) return false;
     await batch.commit();
     return true;
   },
@@ -339,7 +319,12 @@ export const firebaseStore: DataStore = {
     const ref = firestoreDb.collection("users").doc();
     const doc = { ...user, email: user.email.toLowerCase(), createdAt: Timestamp.now() };
     await ref.set(doc);
-    return { ...user, id: ref.id, email: doc.email, createdAt: (doc.createdAt as Timestamp).toDate().toISOString() };
+    return {
+      ...user,
+      id: ref.id,
+      email: doc.email,
+      createdAt: (doc.createdAt as Timestamp).toDate().toISOString(),
+    };
   },
 
   async stats() {
