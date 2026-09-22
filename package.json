@@ -8,8 +8,8 @@
     "build": "next build",
     "start": "next start -H 0.0.0.0",
     "typecheck": "tsc --noEmit",
-    "seed": "node scripts/seed.mjs",
-    "hash-password": "node scripts/hash-password.mjs"
+    "hash-password": "node scripts/hash-password.mjs",
+    "firebase-setup": "node scripts/firebase-setup.mjs"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.6",
@@ -21,8 +21,9 @@
     "@react-three/fiber": "^9.1.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "firebase": "^12.19.0",
+    "firebase-admin": "^14.4.0",
     "lucide-react": "^0.469.0",
-    "mongodb": "^6.15.0",
     "next": "^15.3.0",
     "react": ">=19.1.0 <19.3.0",
     "react-dom": ">=19.1.0 <19.3.0",
