@@ -7,6 +7,34 @@ import { digitsOnly } from "@/lib/utils";
  * configured, the UI degrades gracefully instead of fabricating it.
  */
 
+/**
+ * Resolve the canonical site URL defensively:
+ *  1. a valid NEXT_PUBLIC_SITE_URL
+ *  2. else the Vercel preview URL when building on Vercel
+ *  3. else localhost (development)
+ * An empty or malformed value must never crash `metadataBase`/sitemap.
+ */
+function resolveSiteUrl(): string {
+  const raw = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (raw) {
+    try {
+      const parsed = new URL(raw);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        return parsed.toString().replace(/\/$/, "");
+      }
+    } catch {
+      // fall through to the derived fallbacks
+    }
+  }
+
+  const preview = process.env.VERCEL_URL?.trim();
+  if (preview) return `https://${preview}`;
+
+  return "http://localhost:3000";
+}
+
+const siteUrl = resolveSiteUrl();
+
 const whatsappRaw = digitsOnly(process.env.NEXT_PUBLIC_WHATSAPP_NUMBER ?? "");
 const phoneRaw = (process.env.NEXT_PUBLIC_PHONE ?? "").trim();
 const instagramRaw = (process.env.NEXT_PUBLIC_INSTAGRAM_URL ?? "").trim();
@@ -17,7 +45,7 @@ export const siteConfig = {
   shortName: "MFC",
   owner: "Mohammed Fazil",
   tagline: "Persian Kittens • Pet Food • Madurai",
-  url: (process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000").replace(/\/$/, ""),
+  url: siteUrl,
   city: process.env.NEXT_PUBLIC_BUSINESS_CITY ?? "Madurai, Tamil Nadu, India",
   cityShort: "Madurai",
   address: addressRaw,
