@@ -17,12 +17,15 @@ export function ImageUploader({
   multiple = false,
   label = "Upload image",
   hint,
+  folder,
 }: {
   value: string[];
   onChange: (urls: string[]) => void;
   multiple?: boolean;
   label?: string;
   hint?: string;
+  /** Managed storage folder (Firebase Storage path). */
+  folder?: "kittens" | "products" | "gallery" | "misc";
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [progress, setProgress] = useState<number | null>(null);
@@ -45,7 +48,7 @@ export function ImageUploader({
     setProgress(0);
 
     try {
-      const result = await uploadImage(file, setProgress);
+      const result = await uploadImage(file, setProgress, folder);
       onChange(multiple ? [...value, result.url] : [result.url]);
       setError(null);
     } catch (err) {

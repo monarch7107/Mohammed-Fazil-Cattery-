@@ -18,6 +18,13 @@ const nextConfig = {
   images: {
     formats: ["image/avif", "image/webp"],
     deviceSizes: [360, 480, 640, 768, 1024, 1280, 1600],
+    remotePatterns: [
+      // Firebase Storage (uploaded images) — any project, any folder.
+      { protocol: "https", hostname: "firebasestorage.googleapis.com", pathname: "/**" },
+      { protocol: "https", hostname: "storage.googleapis.com", pathname: "/**" },
+      // Legacy Cloudinary driver.
+      { protocol: "https", hostname: "res.cloudinary.com", pathname: "/**" },
+    ],
   },
   async headers() {
     return [{ source: "/(.*)", headers: securityHeaders }];

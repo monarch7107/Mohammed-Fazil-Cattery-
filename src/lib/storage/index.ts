@@ -8,8 +8,12 @@ import type { AcceptedMime } from "@/lib/images";
  * Storage abstraction.
  *
  * The frontend only ever receives a URL string, so switching the production
- * driver (local → Cloudinary, S3, UploadThing…) requires zero component
- * changes — only environment variables.
+ * driver requires zero component changes — only environment variables.
+ *
+ * Drivers:
+ *  - firebase    → Firebase Storage (production; folders kittens/ products/ gallery/)
+ *  - local       → public/uploads on disk (development only)
+ *  - cloudinary  → Cloudinary (legacy alternative, still available)
  */
 
 export interface StoredImage {
@@ -20,10 +24,55 @@ export interface StoredImage {
 }
 
 export interface ImageStorageDriver {
-  readonly name: "local" | "cloudinary";
-  save(bytes: Uint8Array, mime: AcceptedMime): Promise<StoredImage>;
+  readonly name: "firebase" | "local" | "cloudinary";
+  save(bytes: Uint8Array, mime: AcceptedMime, folder?: string): Promise<StoredImage>;
   remove(key: string): Promise<void>;
 }
+
+/* ------------------------------ Firebase -------------------------- */
+
+const FIREBASE_FOLDERS = new Set(["kittens", "products", "gallery", "misc"]);
+
+function safeFolder(folder?: string | null): string {
+  const candidate = folder?.trim().toLowerCase();
+  return candidate && FIREBASE_FOLDERS.has(candidate) ? candidate : "misc";
+}
+
+const firebaseDriver: ImageStorageDriver = {
+  name: "firebase",
+  async save(bytes, mime, folder) {
+    const { storage } = await import("@/lib/firebase/admin");
+    const bucket = storage();
+    if (!bucket) throw new Error("Firebase Storage is not configured");
+
+    const dir = safeFolder(folder);
+    const ext = mime === "image/jpeg" ? "jpg" : mime.split("/")[1];
+    const filePath = `${dir}/${Date.now().toString(36)}-${randomUUID().slice(0, 8)}.${ext}`;
+    const fileRef = bucket.file(filePath);
+
+    await fileRef.save(Buffer.from(bytes), {
+      contentType: mime,
+      resumable: false,
+      metadata: { cacheControl: "public, max-age=31536000, immutable" },
+    });
+    await fileRef.makePublic().catch(() => undefined);
+
+    return {
+      url: `https://storage.googleapis.com/${bucket.name}/${filePath}`,
+      key: filePath,
+    };
+  },
+
+  async remove(key) {
+    const { storage } = await import("@/lib/firebase/admin");
+    const bucket = storage();
+    if (!bucket || !key) return;
+    // Only delete object paths inside the managed folders.
+    const dir = key.split("/")[0];
+    if (!FIREBASE_FOLDERS.has(dir)) return;
+    await bucket.file(key).delete({ ignoreNotFound: true }).catch(() => undefined);
+  },
+};
 
 /* ------------------------------- Local ---------------------------- */
 
@@ -127,12 +176,31 @@ const cloudinaryDriver: ImageStorageDriver = {
 
 /* ------------------------------ Resolver -------------------------- */
 
+/**
+ * Driver selection:
+ *  1. IMAGE_STORAGE_DRIVER forces a specific driver when set.
+ *  2. Firebase Admin credentials present → Firebase Storage (the default
+ *     production driver for this project).
+ *  3. Otherwise the local disk driver (development).
+ */
 export function activeDriver(): ImageStorageDriver {
   const configured = process.env.IMAGE_STORAGE_DRIVER?.trim();
+  if (configured === "firebase") return firebaseDriver;
   if (configured === "cloudinary") return cloudinaryDriver;
+  if (configured === "local") return localDriver;
+
+  const hasFirebase =
+    Boolean(process.env.FIREBASE_PROJECT_ID?.trim()) &&
+    Boolean(process.env.FIREBASE_CLIENT_EMAIL?.trim()) &&
+    Boolean(process.env.FIREBASE_PRIVATE_KEY?.trim());
+  if (hasFirebase) return firebaseDriver;
+
   return localDriver;
 }
 
 export function storageIsPersistent(): boolean {
-  return activeDriver().name === "cloudinary";
+  return activeDriver().name !== "local";
 }
+
+/** Folder allowlist shared with the upload endpoint. */
+export const UPLOAD_FOLDERS = [...FIREBASE_FOLDERS] as const;

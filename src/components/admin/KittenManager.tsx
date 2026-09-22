@@ -367,6 +367,7 @@ export function KittenManager({
                   value={form.images}
                   onChange={(urls) => set("images", urls)}
                   hint="JPG, PNG, WEBP or AVIF · up to 8 MB each"
+                  folder="kittens"
                 />
               </div>
             </div>
