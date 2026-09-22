@@ -17,17 +17,23 @@ function derive(password: string, salt: Buffer): Promise<Buffer> {
   });
 }
 
-/** scrypt$<N>.<r>.<p>$<salt hex>$<hash hex> */
+/**
+ * Hash format: scrypt:N.r.p:<salt hex>:<hash hex>
+ * Colons are used as the separator (instead of the more common "$") because
+ * dotenv-style loaders expand "$" sequences in .env values, which corrupts
+ * the hash. The legacy "$" format is still accepted when verifying.
+ */
 export async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
   const key = await derive(password, salt);
-  return `scrypt$${COST}.${BLOCK_SIZE}.${PARALLELISM}$${salt.toString("hex")}$${key.toString("hex")}`;
+  return `scrypt:${COST}.${BLOCK_SIZE}.${PARALLELISM}:${salt.toString("hex")}:${key.toString("hex")}`;
 }
 
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
-  if (!stored || !stored.startsWith("scrypt$")) return false;
+  if (!stored || !stored.startsWith("scrypt")) return false;
+  const sep = stored.startsWith("scrypt$") ? "$" : ":";
   try {
-    const [, params, saltHex, hashHex] = stored.split("$");
+    const [, params, saltHex, hashHex] = stored.split(sep);
     if (!params || !saltHex || !hashHex) return false;
     const [n, r, p] = params.split(".").map(Number);
     if (!n || !r || !p) return false;
@@ -53,5 +59,5 @@ export async function verifyPassword(password: string, stored: string): Promise<
 
 /** Constant-time-ish dummy verification to reduce user enumeration timing signal. */
 export async function dummyVerify(): Promise<void> {
-  await verifyPassword("not-a-real-password", `scrypt$${COST}.${BLOCK_SIZE}.${PARALLELISM}$${"00".repeat(16)}$${"00".repeat(64)}`);
+  await verifyPassword("not-a-real-password", `scrypt:${COST}.${BLOCK_SIZE}.${PARALLELISM}:${"00".repeat(16)}:${"00".repeat(64)}`);
 }

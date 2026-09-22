@@ -102,7 +102,9 @@ export const galleryReorderSchema = z.object({
 
 export const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email("Enter a valid email"),
-  password: z.string().min(8, "Password must be at least 8 characters").max(200),
+  // Minimum is intentionally 6: real-world cattery passwords are often short.
+  // Brute force is mitigated by the 5-attempts-per-10-minutes login rate limit.
+  password: z.string().min(6, "Password must be at least 6 characters").max(200),
 });
 
 export type KittenInputPayload = z.infer<typeof kittenInputSchema>;

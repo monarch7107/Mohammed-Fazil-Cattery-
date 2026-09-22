@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getStore } from "@/lib/db";
 import { verifyPassword, dummyVerify } from "@/lib/auth/password";
+import { envAdmins, type EnvAdmin } from "@/lib/auth/env-admins";
 import { createSessionToken, setSessionCookie } from "@/lib/auth/session";
 import {
   assertSameOrigin,
@@ -41,10 +42,8 @@ export async function POST(request: Request) {
     const store = await getStore();
     const user = await store.findAdminByEmail(email);
 
-    // Environment-configured fallback admin (useful before the first DB user exists).
-    const envEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
-    const envHash = process.env.ADMIN_PASSWORD_HASH?.trim();
-    const envMatches = Boolean(envEmail && envHash && envEmail === email);
+    // Environment-configured accounts (useful before/without a users collection).
+    const envAdmin = envAdmins().find((candidate) => candidate.email === email);
 
     let valid = false;
     let name = "Administrator";
@@ -52,8 +51,9 @@ export async function POST(request: Request) {
     if (user?.passwordHash) {
       valid = await verifyPassword(password, user.passwordHash);
       name = user.name;
-    } else if (envMatches && envHash) {
-      valid = await verifyPassword(password, envHash);
+    } else if (envAdmin) {
+      valid = await verifyPassword(password, envAdmin.passwordHash);
+      name = envAdmin.name;
     } else {
       await dummyVerify();
     }
@@ -64,7 +64,11 @@ export async function POST(request: Request) {
 
     resetRateLimit(key);
 
-    const token = createSessionToken({ sub: user?.id ?? "env-admin", email, name });
+    const token = createSessionToken({
+      sub: user?.id ?? envAdmin?.id ?? "env-admin",
+      email,
+      name,
+    });
     await setSessionCookie(token);
 
     return NextResponse.json({ ok: true, email, name });
