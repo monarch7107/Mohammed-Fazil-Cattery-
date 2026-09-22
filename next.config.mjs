@@ -15,6 +15,9 @@ const securityHeaders = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // Keep the Admin SDK out of the server bundle: it relies on dynamic
+  // requires and gRPC that break when bundled (verified on Vercel).
+  serverExternalPackages: ["firebase-admin"],
   images: {
     formats: ["image/avif", "image/webp"],
     deviceSizes: [360, 480, 640, 768, 1024, 1280, 1600],
