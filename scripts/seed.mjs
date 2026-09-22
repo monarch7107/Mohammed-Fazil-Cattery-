@@ -1,152 +1,112 @@
 #!/usr/bin/env node
 /**
- * Seed MongoDB:
- *   1. an admin user (from ADMIN_EMAIL / ADMIN_PASSWORD_HASH)
- *   2. clearly-labelled placeholder kittens, products and gallery entries
- *      (only when the collections are empty, unless --force)
+ * Seed Firestore with clearly-labelled placeholder content.
  *
- *   MONGODB_URI="mongodb+srv://..." node scripts/seed.mjs [--force]
+ * Requires FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY.
+ * Use --force only when you intentionally want to replace the three public
+ * content collections with fresh placeholders.
  */
-import { MongoClient, ObjectId } from "mongodb";
+import { cert, getApps, initializeApp } from "firebase-admin/app";
+import { getFirestore, Timestamp } from "firebase-admin/firestore";
 
-const uri = process.env.MONGODB_URI;
-if (!uri) {
-  console.error("\nMONGODB_URI is not set. Copy env.example to .env.local and fill it in.\n");
+const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
+const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
+const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n").trim();
+
+if (!projectId || !clientEmail || !privateKey) {
+  console.error("\nFirebase is not configured. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY.\n");
   process.exit(1);
 }
 
-const dbName = process.env.MONGODB_DB || "mohammed_fazil_cattery";
+if (getApps().length === 0) {
+  initializeApp({
+    credential: cert({ projectId, clientEmail, privateKey }),
+    projectId,
+  });
+}
+
+const db = getFirestore();
 const force = process.argv.includes("--force");
-const email = (process.env.ADMIN_EMAIL || "admin@mohammedfazilcattery.local").toLowerCase();
-const passwordHash = process.env.ADMIN_PASSWORD_HASH;
+const timestamp = Timestamp.now();
 
-const now = () => new Date();
-
-const placeholderKittens = [
+const kittens = [
   { name: "Persian Kitten — Placeholder 01", status: "available", gender: "male", featured: true },
   { name: "Persian Kitten — Placeholder 02", status: "available", gender: "female", featured: true },
   { name: "Persian Kitten — Placeholder 03", status: "reserved", gender: "unknown", featured: false },
   { name: "Persian Kitten — Placeholder 04", status: "sold", gender: "male", featured: false },
 ].map((entry) => ({
   ...entry,
-  _id: new ObjectId(),
   breed: "Persian",
   dateOfBirth: null,
-  description:
-    "Placeholder record. Replace it from Admin → Kittens with the real kitten details, photographs and availability.",
+  description: "Placeholder record. Replace it from Admin → Kittens with the real kitten details, photographs and availability.",
   price: null,
   images: [],
   placeholder: true,
-  createdAt: now(),
-  updatedAt: now(),
+  createdAt: timestamp,
+  updatedAt: timestamp,
 }));
 
-const placeholderProducts = [
+const products = [
   { name: "Cat Food — Placeholder (Dry)", animal: "cat", category: "dry" },
   { name: "Cat Food — Placeholder (Wet)", animal: "cat", category: "wet" },
   { name: "Dog Food — Placeholder (Dry)", animal: "dog", category: "dry" },
   { name: "Dog Food — Placeholder (Wet)", animal: "dog", category: "wet" },
 ].map((entry) => ({
   ...entry,
-  _id: new ObjectId(),
   foodType: entry.category === "dry" ? "Dry Food" : "Wet Food",
   brand: null,
   packSize: null,
   price: null,
-  description:
-    "Placeholder record. Replace it from Admin → Products with the real brand, pack size and price when you stock it.",
+  description: "Placeholder record. Replace it from Admin → Products with the real brand, pack size and price when stocked.",
   image: null,
   available: true,
   placeholder: true,
-  createdAt: now(),
-  updatedAt: now(),
+  createdAt: timestamp,
+  updatedAt: timestamp,
 }));
 
-const placeholderGallery = [
-  { category: "kittens", caption: "Kitten Photo — Placeholder" },
-  { category: "cats", caption: "Persian Cat Image — Placeholder" },
-  { category: "pet-food", caption: "Pet Food Product — Placeholder" },
-  { category: "cattery", caption: "Cattery Photo — Placeholder" },
-  { category: "kittens", caption: "Kitten Photo — Placeholder" },
-  { category: "cats", caption: "Persian Cat Image — Placeholder" },
-].map((entry, index) => ({
-  ...entry,
-  _id: new ObjectId(),
+const gallery = [
+  ["kittens", "Kitten Photo — Placeholder"],
+  ["cats", "Persian Cat Image — Placeholder"],
+  ["pet-food", "Pet Food Product — Placeholder"],
+  ["cattery", "Cattery Photo — Placeholder"],
+  ["kittens", "Kitten Photo — Placeholder"],
+  ["cats", "Persian Cat Image — Placeholder"],
+].map(([category, caption], index) => ({
+  category,
+  caption,
   image: null,
   sortOrder: index,
   placeholder: true,
-  createdAt: now(),
+  createdAt: timestamp,
 }));
 
-const client = new MongoClient(uri, { serverSelectionTimeoutMS: 10000 });
+async function seedCollection(name, records) {
+  const collection = db.collection(name);
+  const existing = await collection.limit(1).get();
+  if (!force && !existing.empty) {
+    console.log(`• ${name} already contains data — skipped`);
+    return;
+  }
+  if (force) {
+    const all = await collection.get();
+    const deleteBatch = db.batch();
+    all.docs.forEach((doc) => deleteBatch.delete(doc.ref));
+    if (!all.empty) await deleteBatch.commit();
+  }
+
+  const batch = db.batch();
+  records.forEach((record) => batch.set(collection.doc(), record));
+  await batch.commit();
+  console.log(`✓ ${records.length} placeholder ${name} seeded`);
+}
 
 try {
-  await client.connect();
-  const db = client.db(dbName);
-
-  const [kittenCount, productCount, galleryCount, userCount] = await Promise.all([
-    db.collection("kittens").estimatedDocumentCount(),
-    db.collection("products").estimatedDocumentCount(),
-    db.collection("gallery").estimatedDocumentCount(),
-    db.collection("users").estimatedDocumentCount(),
-  ]);
-
-  if (force || kittenCount === 0) {
-    if (kittenCount > 0) await db.collection("kittens").deleteMany({});
-    await db.collection("kittens").insertMany(placeholderKittens);
-    console.log(`✓ ${placeholderKittens.length} placeholder kittens seeded`);
-  } else {
-    console.log(`• kittens already present (${kittenCount}) — skipped`);
-  }
-
-  if (force || productCount === 0) {
-    if (productCount > 0) await db.collection("products").deleteMany({});
-    await db.collection("products").insertMany(placeholderProducts);
-    console.log(`✓ ${placeholderProducts.length} placeholder products seeded`);
-  } else {
-    console.log(`• products already present (${productCount}) — skipped`);
-  }
-
-  if (force || galleryCount === 0) {
-    if (galleryCount > 0) await db.collection("gallery").deleteMany({});
-    await db.collection("gallery").insertMany(placeholderGallery);
-    console.log(`✓ ${placeholderGallery.length} placeholder gallery entries seeded`);
-  } else {
-    console.log(`• gallery already present (${galleryCount}) — skipped`);
-  }
-
-  if (passwordHash) {
-    const existing = await db.collection("users").findOne({ email });
-    if (!existing) {
-      await db.collection("users").insertOne({
-        email,
-        name: "Administrator",
-        passwordHash,
-        role: "admin",
-        createdAt: now(),
-      });
-      console.log(`✓ admin user created: ${email}`);
-    } else {
-      console.log(`• admin user already exists: ${email}`);
-    }
-  } else if (userCount === 0) {
-    console.log(
-      "• ADMIN_PASSWORD_HASH not set — no admin user created. Run: node scripts/hash-password.mjs \"your-password\""
-    );
-  }
-
-  await Promise.all([
-    db.collection("kittens").createIndex({ status: 1, createdAt: -1 }),
-    db.collection("products").createIndex({ animal: 1, category: 1 }),
-    db.collection("gallery").createIndex({ sortOrder: 1 }),
-    db.collection("users").createIndex({ email: 1 }, { unique: true }),
-  ]);
-  console.log("✓ indexes ensured");
-
-  console.log("\nSeed complete.\n");
+  await seedCollection("kittens", kittens);
+  await seedCollection("products", products);
+  await seedCollection("gallery", gallery);
+  console.log("\nFirestore seed complete.\n");
 } catch (error) {
   console.error("\nSeeding failed:", error.message, "\n");
   process.exitCode = 1;
-} finally {
-  await client.close();
 }
