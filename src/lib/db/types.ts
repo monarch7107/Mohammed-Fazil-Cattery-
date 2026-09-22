@@ -16,11 +16,11 @@ export type ListGalleryFilter = { category?: GalleryCategory };
 
 /**
  * Storage contract. The public site and the admin panel only ever talk to
- * this interface, so swapping MongoDB for another store (or running the
- * in-memory development driver) never touches a single component.
+ * this interface, so swapping MongoDB for Firestore (or running the in-memory
+ * development driver) never touches a single component.
  */
 export interface DataStore {
-  readonly mode: "mongo" | "memory";
+  readonly mode: "firebase" | "memory";
 
   listKittens(filter?: ListKittenFilter): Promise<Kitten[]>;
   getKitten(id: string): Promise<Kitten | null>;

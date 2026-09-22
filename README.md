@@ -17,7 +17,7 @@ motion effects are unavailable.
 2. [Tech stack](#tech-stack)
 3. [Project structure](#project-structure)
 4. [Local development](#local-development)
-5. [MongoDB setup](#mongodb-setup)
+5. [Firebase setup](#firebase-setup)
 6. [Admin setup](#admin-setup)
 7. [Image upload setup](#image-upload-setup)
 8. [Environment variables](#environment-variables)
@@ -47,16 +47,17 @@ Browser
 Next.js 15 Route Handlers  (/api/*)
   ├─ zod validation on every write
   ├─ session guard + same-origin check + rate limits
-  └─ storage driver (local disk or Cloudinary)
+  └─ storage driver (Firebase Storage · local · Cloudinary)
   │
   ▼
 DataStore interface  (src/lib/db/types.ts)
-  ├─ MongoDB driver   ← MONGODB_URI configured (production / Atlas)
-  └─ in-memory driver ← MONGODB_URI missing (development, clearly-labelled placeholders)
+  ├─ Firestore driver  ← Firebase Admin credentials set (production)
+  └─ in-memory driver  ← not configured (development, clearly-labelled placeholders)
 ```
 
 **Key decision:** every page and endpoint talks to a single `DataStore` interface. Swapping the
-database or running without one never touches a component. The frontend only ever receives URL
+database or running without one never touches a component — the MongoDB → Firebase migration
+changed zero pages, zero sections and none of the 3D cat code. The frontend only ever receives URL
 strings for images, so the storage driver can change without touching any form.
 
 ## Tech stack
@@ -67,8 +68,9 @@ strings for images, so the storage driver can change without touching any form.
 | Styling | Tailwind CSS 3 with a custom brand token set |
 | UI | Radix primitives (Dialog, Select, Label) + CVA variants, heavily customised |
 | 3D | Three.js + React Three Fiber 9 (+ drei), procedural GLTF-free model |
-| Database | MongoDB (official driver), zod-validated documents |
-| Auth | scrypt password hashing, HMAC-signed httpOnly session cookie |
+| Database | Firebase Firestore (Admin SDK), zod-validated documents |
+| Auth | Firebase Authentication (ID-token exchange) with signed httpOnly session cookie |
+| Storage | Firebase Storage (managed folders), local disk (dev) and Cloudinary (legacy) |
 | Deployment | Vercel (or Freebuff-managed hosting) |
 
 Brand tokens live in `tailwind.config.ts` + `src/app/globals.css`:
@@ -95,13 +97,15 @@ src/
     providers/  AppProviders · IntroProvider · CatMoodProvider
     hero/ sections/ kittens/ products/ gallery/ contact/ layout/ brand/ images/ admin/ ui/ seo/
   lib/
-    db/         store contract, MongoDB driver, memory driver, placeholder data
-    auth/       password · session · guard · page-guard
-    storage/    local + Cloudinary drivers
+    db/         store contract, Firestore driver, memory driver, placeholder data
+    firebase/   client config · Admin SDK (server-only) · auth · authorization
+    auth/       password (legacy fallback) · session · guard · page-guard
+    storage/    Firebase Storage + local + Cloudinary drivers
     admin/      fetch wrapper with upload progress
     site.ts  whatsapp.ts  data.ts  validation.ts  images.ts  utils.ts
   models/       types.ts (Kitten/Product/Gallery/AdminUser) · schemas.ts (zod)
-scripts/        seed.mjs · hash-password.mjs
+scripts/        firebase-setup.mjs (two admin accounts + seed) · hash-password.mjs
+firebase.json   firestore.rules  storage.rules  firestore.indexes.json
 env.example     environment template (copy to .env.local)
 ```
 
@@ -115,66 +119,98 @@ bun run typecheck      # tsc --noEmit
 bun run build          # production build
 ```
 
-Without `MONGODB_URI` the app still runs end-to-end (public pages, API and admin CRUD) using an
-in-memory store seeded with clearly-labelled placeholder records.
+Without Firebase credentials the app still runs end-to-end (public pages, API and admin CRUD)
+using an in-memory store seeded with clearly-labelled placeholder records.
 
-## MongoDB setup
+## Firebase setup
 
-1. Create a free cluster at [MongoDB Atlas](https://www.mongodb.com/atlas).
-2. Add a database user and allow your network (or `0.0.0.0/0` for serverless/Vercel).
-3. Copy the connection string into `.env.local`:
-   ```
-   MONGODB_URI=mongodb+srv://user:pass@cluster0.xxxxx.mongodb.net/
-   MONGODB_DB=mohammed_fazil_cattery
-   ```
-4. Seed content + indexes (optional — the app also auto-seeds empty collections on first read):
+The backend uses **Firebase Authentication** (admin sign-in), **Firestore** (content) and
+**Firebase Storage** (images). One free Spark project covers it.
+
+1. Create a project at the [Firebase Console](https://console.firebase.google.com) (e.g.
+   `mohammed-fazil-cattery`), then add a **Web app** (`</>` icon) to get the client config.
+2. Enable **Authentication → Sign-in method → Email/Password**.
+3. Enable **Firestore Database** (production mode — the repo's rules below replace them).
+4. Enable **Storage** (default bucket is fine).
+5. Server credentials: **Project settings → Service accounts → Generate new private key** —
+   copy `project_id`, `client_email` and `private_key` into the env vars below (keep the
+   private key on one line; the app converts `\n` sequences automatically).
+
+Fill these in `.env.local` (see `env.example`):
+
+```
+NEXT_PUBLIC_FIREBASE_API_KEY=...
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=<project>.firebaseapp.com
+NEXT_PUBLIC_FIREBASE_PROJECT_ID=<project>
+NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET=<project>.appspot.com
+NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID=...
+NEXT_PUBLIC_FIREBASE_APP_ID=...
+FIREBASE_PROJECT_ID=<project>
+FIREBASE_CLIENT_EMAIL=firebase-adminsdk-...@<project>.iam.gserviceaccount.com
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+```
+
+6. Provision the **two admin accounts** and starter content (see [Admin setup](#admin-setup)):
    ```bash
-   node scripts/hash-password.mjs "your-strong-password"   # prints ADMIN_PASSWORD_HASH (scrypt:…)
-   MONGODB_URI="..." ADMIN_EMAIL="you@example.com" ADMIN_PASSWORD_HASH="scrypt:..." node scripts/seed.mjs
+   npm run firebase-setup
+   ```
+7. Deploy the security rules from the repo (identical rules live in the console under
+   Firestore → Rules and Storage → Rules):
+   ```bash
+   npm i -g firebase-tools && firebase login
+   firebase deploy --only firestore:rules,firestore:indexes,storage:rules
    ```
 
-**Collections:** `kittens`, `products`, `gallery`, `users`.
-Indexes: `kittens{status,createdAt}`, `products{animal,category}`, `gallery{sortOrder}`,
-`users{email unique}`.
+**Collections:** `admins`, `kittens`, `products`, `gallery`.
 
 ### Data models
 
 ```ts
-Kitten   { name, breed, gender, dateOfBirth, description, status(available|reserved|sold),
-           price, images[], featured, placeholder, createdAt, updatedAt }
-Product  { name, animal(cat|dog), category(dry|wet), foodType, brand, packSize, price,
-           description, image, available, placeholder, createdAt, updatedAt }
-Gallery  { image, category(kittens|cats|pet-food|cattery), caption, sortOrder, placeholder, createdAt }
-User     { email, name, passwordHash(scrypt), role: "admin", createdAt }
+admins/{uid}  { uid, email, role: "admin", active: true, createdAt, updatedAt }
+Kitten        { name, breed, gender, dateOfBirth, description, status(available|reserved|sold),
+                price, images[], featured, placeholder, createdAt, updatedAt }
+Product       { name, animal(cat|dog), category(dry|wet), foodType, brand, packSize, price,
+                description, image, available, placeholder, createdAt, updatedAt }
+Gallery       { image, category(kittens|cats|pet-food|cattery), caption, sortOrder, placeholder, createdAt }
 ```
 
 Empty/unknown fields are **never rendered** — the site shows only what actually exists.
 
 ## Admin setup
 
-1. Generate a hash: `node scripts/hash-password.mjs "a-strong-password"` (minimum 8 chars).
-2. Either set `ADMIN_EMAIL` + `ADMIN_PASSWORD_HASH` (and optionally `OWNER_EMAIL` +
-   `OWNER_PASSWORD_HASH` for a second account) in your environment (works even before the
-   database has users), or insert a document into `users` (the seed script does this for you).
-3. Set `AUTH_SECRET` (required in production): `openssl rand -hex 32`.
-4. Visit **`/admin`** → redirected to `/admin/login` → dashboard at `/admin/dashboard`.
+The site supports **two administrator accounts** (Administrator + Owner) with identical
+permissions. Provision both in one step:
+
+```bash
+FIREBASE_PROJECT_ID="..." FIREBASE_CLIENT_EMAIL="..." FIREBASE_PRIVATE_KEY="..." \
+ADMIN_EMAIL="first-admin@example.com"  ADMIN_PASSWORD="a-strong-password" \
+OWNER_EMAIL="second-admin@example.com" OWNER_PASSWORD="another-strong-password" \
+npm run firebase-setup
+```
+
+The script creates/updates both Firebase Auth users, sets the `admin: true` custom claim on each,
+and writes the matching `admins/{uid}` Firestore documents. Passwords are used at run time only —
+they are never stored in the repo or in Firestore.
+
+**Before Firebase is configured** (development), env fallback accounts work:
+`ADMIN_EMAIL` + `ADMIN_PASSWORD_HASH` and `OWNER_EMAIL` + `OWNER_PASSWORD_HASH`
+(hash with `npm run hash-password "password"`).
+
+1. Set `AUTH_SECRET` (required in production): `openssl rand -hex 32`.
+2. Visit **`/admin`** → redirected to `/admin/login` → dashboard at `/admin/dashboard`.
 
 Admin capabilities: dashboard statistics, kitten CRUD, product CRUD, gallery upload / caption /
-category / reorder / delete. Every admin route and write endpoint is protected.
+category / reorder / delete. Every admin route and write endpoint is protected server-side, and
+Firestore/Storage rules enforce authorisation at the database layer too.
 
 ## Image upload setup
 
 **Development** — `IMAGE_STORAGE_DRIVER=local` writes to `public/uploads/YYYY/MM/…`.
 
-**Production** — the serverless filesystem is read-only/ephemeral, so switch to the built-in
-Cloudinary driver:
-
-```bash
-IMAGE_STORAGE_DRIVER=cloudinary
-CLOUDINARY_CLOUD_NAME=...
-CLOUDINARY_API_KEY=...
-CLOUDINARY_API_SECRET=...      # or CLOUDINARY_UPLOAD_PRESET for unsigned uploads
-```
+**Production** — Firebase Storage (the default once the Firebase Admin credentials exist):
+uploads land in the managed folders `kittens/`, `products/`, `gallery/` and are made public with
+immutable cache headers. Force it explicitly with `IMAGE_STORAGE_DRIVER=firebase`. A legacy
+Cloudinary driver is also still available.
 
 Changing the driver requires **no frontend changes** — forms emit URL strings only.
 
@@ -193,11 +229,11 @@ See `env.example` for the complete, commented list. Highlights:
 | `NEXT_PUBLIC_PHONE` | `tel:` links. Unset → call buttons fall back to `/contact`. |
 | `NEXT_PUBLIC_INSTAGRAM_URL` | Instagram section renders **only** when set. |
 | `NEXT_PUBLIC_BUSINESS_ADDRESS` | Directions link renders **only** when set. |
-| `MONGODB_URI` | Database. Unset → in-memory development store. |
+| `NEXT_PUBLIC_FIREBASE_*` | Firebase web-app config (public identifiers, safe to expose). |
+| `FIREBASE_PROJECT_ID` / `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY` | Server-only Admin SDK credentials. Unset → in-memory development store. |
 | `AUTH_SECRET` | Session cookie signing (mandatory in production). |
-| `ADMIN_EMAIL` / `ADMIN_PASSWORD_HASH` | Environment admin fallback. |
-| `OWNER_EMAIL` / `OWNER_PASSWORD_HASH` | Optional second (owner) env account. |
-| `IMAGE_STORAGE_DRIVER` | `local` \| `cloudinary`. |
+| `ADMIN_EMAIL` + `ADMIN_PASSWORD_HASH` / `OWNER_EMAIL` + `OWNER_PASSWORD_HASH` | Legacy env admin fallback (before/without Firebase). |
+| `IMAGE_STORAGE_DRIVER` | `firebase` \| `local` \| `cloudinary` (auto-detects Firebase when unset). |
 
 ## 3D cat architecture
 
@@ -244,7 +280,8 @@ CatCompanion (fixed dock, lazy, aria-hidden, decorative)
 | POST | `/api/gallery` | admin | |
 | PATCH/DELETE | `/api/gallery/:id` | admin | delete also removes the stored file |
 | POST | `/api/gallery/reorder` | admin | `{ orderedIds: string[] }` |
-| POST | `/api/auth/login` | – | rate-limited 5 / 10 min / IP |
+| POST | `/api/auth/login` | – | Firebase ID-token exchange or legacy password; rate-limited 5 / 10 min / IP |
+| GET | `/api/auth/mode` | – | reports whether the Firebase flow is active |
 | POST | `/api/auth/logout` | session | clears cookie |
 | GET | `/api/auth/me` | – | session + environment info |
 | GET | `/api/admin/stats` | admin | dashboard counts |
@@ -253,18 +290,26 @@ CatCompanion (fixed dock, lazy, aria-hidden, decorative)
 ## Vercel deployment
 
 1. Push the repository and import it into Vercel (Next.js is auto-detected).
-2. Add environment variables: `MONGODB_URI`, `MONGODB_DB`, `AUTH_SECRET`,
-   `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH`, `NEXT_PUBLIC_SITE_URL` (your real domain),
-   `NEXT_PUBLIC_WHATSAPP_NUMBER`, `NEXT_PUBLIC_PHONE`, `NEXT_PUBLIC_INSTAGRAM_URL`,
-   `IMAGE_STORAGE_DRIVER=cloudinary` + the Cloudinary keys.
-3. Allow Atlas network access for Vercel's outbound IPs (or `0.0.0.0/0`).
+2. Add environment variables: the `NEXT_PUBLIC_FIREBASE_*` set, `FIREBASE_PROJECT_ID`,
+   `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, `AUTH_SECRET`, `NEXT_PUBLIC_SITE_URL`
+   (your real domain), `NEXT_PUBLIC_WHATSAPP_NUMBER`, `NEXT_PUBLIC_PHONE`,
+   `NEXT_PUBLIC_INSTAGRAM_URL`. Storage defaults to Firebase automatically.
+3. Run `npm run firebase-setup` once (locally, with the same credentials) to create the two
+   admins and seed placeholder content; deploy the rules with `firebase deploy`.
 4. Deploy. Build command default: `next build`; output handled by the Next.js runtime.
 5. Sign in at `/admin` and replace the placeholder records with real content
    (or set `SEED_ON_EMPTY=false` before the first deploy if you prefer empty collections).
 
 ## Security
 
-- scrypt password hashing (N=16384, r=8, p=1) — plaintext passwords are never stored.
+- Firebase Authentication signs admins in; the server verifies the ID token with the Admin SDK
+  (revocation-checked) and re-checks authorisation against the `admins` collection before issuing
+  the session. Firebase Admin credentials are **server-only** (never `NEXT_PUBLIC_*`).
+- Legacy fallback passwords use scrypt hashing (N=16384, r=8, p=1) — plaintext passwords are never
+  stored.
+- Firestore/Storage security rules enforce authorisation at the database layer: public read-only
+  content, admin-only writes, `admins` documents untouchable from clients, uploads limited to
+  admins + managed folders + image MIME + 8 MB.
 - HMAC-SHA256 signed, `httpOnly`, `SameSite=Lax`, `Secure` session cookie (7 days).
 - `AUTH_SECRET` is **required in production** — the app fails closed without it.
 - zod validation on every write payload; string length caps; sanitisation by construction
@@ -320,15 +365,16 @@ CatCompanion (fixed dock, lazy, aria-hidden, decorative)
 | Keyboard navigation & focus | ✅ skip link, focus-visible, dialog focus trap |
 | Reduced motion | ✅ intro skipped, 3D static, animations disabled |
 | Error states | ✅ loading, empty, 404, global error, upload failure, WebGL failure |
-| MongoDB connectivity | ✅ Atlas driver with connection caching + graceful in-memory fallback |
+| Firestore connectivity | ✅ Admin SDK with cached app + graceful in-memory fallback; security rules shipped in-repo |
 
 ## Known limitations
 
-1. **In-memory fallback is per-process** — without `MONGODB_URI`, admin changes reset on restart
-   (by design; it keeps development possible).
+1. **In-memory fallback is per-process** — without Firebase credentials, admin changes reset on
+   restart (by design; it keeps development possible).
 2. **Rate limiting is per-instance** — on serverless this is per-lambda, not global. Move to
    Redis/Upstash for hard guarantees.
-3. **Local image storage is ephemeral on serverless** — use the Cloudinary driver in production.
+3. **Local image storage is ephemeral on serverless** — use the Firebase Storage driver in
+   production.
 4. **No GraphQL/tRPC** — plain route handlers keep the API Vercel-friendly but untyped end-to-end.
 5. **No email channel** — the business communicates by WhatsApp/phone, so there is no contact
    form backend (and no invented inbox).
@@ -349,13 +395,15 @@ CatCompanion (fixed dock, lazy, aria-hidden, decorative)
 
 ## Production checklist
 
-- [ ] `MONGODB_URI` + `MONGODB_DB` set; Atlas network access allows the deployment
+- [ ] Firebase project created; the `NEXT_PUBLIC_FIREBASE_*` set filled in
+- [ ] `FIREBASE_PROJECT_ID` + `FIREBASE_CLIENT_EMAIL` + `FIREBASE_PRIVATE_KEY` set (server-only)
+- [ ] Both admin accounts provisioned (`npm run firebase-setup`); passwords are strong
+- [ ] Security rules deployed (`firebase deploy --only firestore:rules,storage:rules`)
 - [ ] `AUTH_SECRET` set (32+ chars) — app refuses sessions without it in production
-- [ ] Admin credentials created (`npm run seed` or `ADMIN_*` env vars); default password changed
 - [ ] `NEXT_PUBLIC_SITE_URL` set to the real domain (sitemap/OG/canonical)
 - [ ] `NEXT_PUBLIC_WHATSAPP_NUMBER`, `NEXT_PUBLIC_PHONE`, `NEXT_PUBLIC_INSTAGRAM_URL` filled in
 - [ ] `NEXT_PUBLIC_BUSINESS_ADDRESS` set only if verified — otherwise leave empty
-- [ ] `IMAGE_STORAGE_DRIVER=cloudinary` + Cloudinary keys configured
+- [ ] `IMAGE_STORAGE_DRIVER=firebase` (or unset — auto-detected)
 - [ ] Placeholder records replaced or deleted; `SEED_ON_EMPTY=false`
 - [ ] `tsc --noEmit` passes; `next build` succeeds
 - [ ] Checked at 320 / 375 / 390 / 430 / 768 / 1024 / 1440 px

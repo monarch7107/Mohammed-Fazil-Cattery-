@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { activeDriver } from "@/lib/storage";
-import { hasMongoConfig } from "@/lib/db/mongo";
+import { isFirebaseAdminConfigured } from "@/lib/firebase/admin-app";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,7 +13,7 @@ export async function GET() {
     email: session?.email ?? null,
     name: session?.name ?? null,
     environment: {
-      database: hasMongoConfig() ? "mongo" : "memory",
+      database: isFirebaseAdminConfigured() ? "firebase" : "memory",
       storage: activeDriver().name,
     },
   });

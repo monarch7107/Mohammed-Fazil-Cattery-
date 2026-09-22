@@ -105,6 +105,9 @@ export const loginSchema = z.object({
   // Minimum is intentionally 6: real-world cattery passwords are often short.
   // Brute force is mitigated by the 5-attempts-per-10-minutes login rate limit.
   password: z.string().min(6, "Password must be at least 6 characters").max(200),
+  // Firebase Authentication ID token (production path). When present the
+  // server verifies the token instead of checking a password hash.
+  idToken: z.string().trim().min(10).max(4096).optional(),
 });
 
 export type KittenInputPayload = z.infer<typeof kittenInputSchema>;

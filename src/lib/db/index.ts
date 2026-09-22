@@ -1,5 +1,6 @@
 import type { DataStore } from "@/lib/db/types";
-import { hasMongoConfig, mongoStore } from "@/lib/db/mongo";
+import { isFirebaseAdminConfigured } from "@/lib/firebase/admin-app";
+import { firestoreStore } from "@/lib/db/firestore";
 import { memoryStore } from "@/lib/db/memory";
 
 export type { DataStore } from "@/lib/db/types";
@@ -12,26 +13,27 @@ const globalRef = globalThis as typeof globalThis & {
 /**
  * Returns the active data store.
  *
- * - MONGODB_URI configured  → MongoDB (production + Atlas development)
- * - otherwise               → in-memory driver with clearly-labelled
- *                             placeholder data, so the site, the API and the
- *                             admin panel all keep working during development.
+ * - Firebase Admin credentials configured → Firestore (production)
+ * - otherwise                             → in-memory driver with clearly-
+ *                                           labelled placeholder data, so the
+ *                                           site, API and admin panel keep
+ *                                           working during development.
  */
 export async function getStore(): Promise<DataStore> {
-  if (!hasMongoConfig()) {
+  if (!isFirebaseAdminConfigured()) {
     warnOnce(
-      "MONGODB_URI is not set — running with the in-memory development store (placeholder data)."
+      "Firebase Admin credentials are not set — running with the in-memory development store (placeholder data)."
     );
     return memoryStore;
   }
 
   if (!globalRef.__mfcActiveStore) {
     try {
-      await mongoStore.stats(); // forces connection + first-run seed
-      globalRef.__mfcActiveStore = mongoStore;
+      await firestoreStore.stats(); // forces connection + first-run seed
+      globalRef.__mfcActiveStore = firestoreStore;
     } catch (error) {
       warnOnce(
-        `MongoDB connection failed (${(error as Error).message}) — falling back to the in-memory store.`
+        `Firestore connection failed (${(error as Error).message}) — falling back to the in-memory store.`
       );
       globalRef.__mfcActiveStore = memoryStore;
     }
@@ -42,11 +44,10 @@ export async function getStore(): Promise<DataStore> {
 
 /** Non-blocking variant for rendering paths that must never throw. */
 export function getStoreSafe(): DataStore {
-  if (!hasMongoConfig() || globalRef.__mfcActiveStore?.mode === "memory") {
+  if (!isFirebaseAdminConfigured() || globalRef.__mfcActiveStore?.mode === "memory") {
     return globalRef.__mfcActiveStore ?? memoryStore;
   }
   if (globalRef.__mfcActiveStore) return globalRef.__mfcActiveStore;
-  // Kick the connection off; reads below will still await via getStore().
   void getStore().catch(() => undefined);
   return globalRef.__mfcActiveStore ?? memoryStore;
 }

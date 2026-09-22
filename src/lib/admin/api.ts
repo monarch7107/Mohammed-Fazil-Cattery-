@@ -54,11 +54,13 @@ export async function apiSend<T>(
 /** Upload with progress via XHR (fetch has no upload progress). */
 export function uploadImage(
   file: File,
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
+  folder?: "kittens" | "products" | "gallery" | "misc"
 ): Promise<{ url: string; width: number; height: number; bytes: number }> {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append("file", file);
+    if (folder) form.append("folder", folder);
 
     const xhr = new XMLHttpRequest();
     xhr.open("POST", "/api/upload");

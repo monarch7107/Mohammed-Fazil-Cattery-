@@ -373,6 +373,7 @@ export function ProductManager({
                   value={form.image ? [form.image] : []}
                   onChange={(urls) => set("image", urls[0] ?? "")}
                   hint="JPG, PNG, WEBP or AVIF · up to 8 MB"
+                  folder="products"
                 />
               </div>
             </div>

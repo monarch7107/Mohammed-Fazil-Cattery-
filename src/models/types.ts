@@ -1,4 +1,4 @@
-/** Domain models — MongoDB collections map 1:1 to these shapes. */
+/** Domain models — Firestore documents map 1:1 to these shapes. */
 
 export type KittenStatus = "available" | "reserved" | "sold";
 export type Gender = "male" | "female" | "unknown";

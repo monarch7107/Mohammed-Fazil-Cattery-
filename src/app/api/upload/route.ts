@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { validateImage, ACCEPTED_MIME, type AcceptedMime } from "@/lib/images";
-import { activeDriver } from "@/lib/storage";
+import { activeDriver, UPLOAD_FOLDERS } from "@/lib/storage";
 import {
   requireAdmin,
   assertSameOrigin,
@@ -35,6 +35,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No file was provided." }, { status: 400 });
   }
 
+  const folderRaw = form.get("folder");
+  const folder =
+    typeof folderRaw === "string" && (UPLOAD_FOLDERS as readonly string[]).includes(folderRaw)
+      ? folderRaw
+      : undefined;
+
   const buffer = new Uint8Array(await file.arrayBuffer());
   const validation = validateImage(buffer, file.type);
 
@@ -46,7 +52,7 @@ export async function POST(request: Request) {
 
   try {
     const driver = activeDriver();
-    const stored = await driver.save(buffer, validation.mime as AcceptedMime);
+    const stored = await driver.save(buffer, validation.mime as AcceptedMime, folder);
 
     return NextResponse.json({
       url: stored.url,

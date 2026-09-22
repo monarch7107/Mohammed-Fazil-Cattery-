@@ -62,8 +62,11 @@ export async function DELETE(request: Request, { params }: Params) {
     // Best-effort cleanup of the stored file (no-op for placeholder records).
     if (removed && item.image?.startsWith("/uploads/")) {
       await activeDriver().remove(`${process.cwd()}/public${item.image}`).catch(() => undefined);
+    } else if (removed && item.image?.startsWith("https://storage.googleapis.com/")) {
+      // Firebase Storage object key is the path after the bucket name.
+      const withoutBucket = item.image.split("/").slice(4).join("/");
+      await activeDriver().remove(withoutBucket).catch(() => undefined);
     }
-
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("[api/gallery/:id] DELETE failed", error);

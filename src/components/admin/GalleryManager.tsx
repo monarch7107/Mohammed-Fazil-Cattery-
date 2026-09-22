@@ -137,6 +137,7 @@ export function GalleryManager({ initialItems }: { initialItems: GalleryItem[] }
               value={image ? [image] : []}
               onChange={(urls) => setImage(urls[0] ?? "")}
               hint="JPG, PNG, WEBP or AVIF · up to 8 MB"
+              folder="gallery"
             />
           </div>
         </div>
