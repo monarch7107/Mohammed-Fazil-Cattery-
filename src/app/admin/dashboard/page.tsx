@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Cat, Images, Package, Plus, type LucideIcon } from "lucide-react";
 import { requireAdminPage } from "@/lib/auth/page-guard";
 import { getStats, listGallery, listKittens, listProducts } from "@/lib/data";
-import { hasMongoConfig } from "@/lib/db/mongo";
+import { isFirebaseAdminConfigured } from "@/lib/firebase/admin-app";
 import { storageIsPersistent } from "@/lib/storage";
 import { Badge } from "@/components/ui/badge";
 
@@ -43,7 +43,7 @@ export default async function AdminDashboardPage() {
     listGallery(),
   ]);
 
-  const mongo = hasMongoConfig();
+  const firebase = isFirebaseAdminConfigured();
   const persistentStorage = storageIsPersistent();
 
   const recent = [
@@ -104,14 +104,14 @@ export default async function AdminDashboardPage() {
         </div>
       </div>
 
-      {(!mongo || !persistentStorage) && (
+      {(!firebase || !persistentStorage) && (
         <div className="rounded-lg border border-dashed border-brown/40 bg-brown/8 px-5 py-4 text-[13px] leading-relaxed text-brown">
           <strong className="font-semibold">Development mode:</strong>{" "}
-          {!mongo
-            ? "MONGODB_URI is not set, so data lives in memory and resets when the server restarts. "
+          {!firebase
+            ? "Firebase Admin credentials are not set, so data lives in memory and resets when the server restarts. "
             : ""}
           {!persistentStorage
-            ? "Image uploads are stored on local disk; switch IMAGE_STORAGE_DRIVER to cloudinary for production."
+            ? "Image uploads are stored on local disk; configure Firebase Storage for production."
             : null}
         </div>
       )}

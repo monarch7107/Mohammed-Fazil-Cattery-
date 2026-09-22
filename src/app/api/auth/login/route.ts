@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { getStore } from "@/lib/db";
 import { verifyPassword, dummyVerify } from "@/lib/auth/password";
-import { envAdmins, type EnvAdmin } from "@/lib/auth/env-admins";
+import { envAdmins } from "@/lib/auth/env-admins";
 import { createSessionToken, setSessionCookie } from "@/lib/auth/session";
+import { verifyIdToken } from "@/lib/firebase/auth";
+import { isAdminAuthorized } from "@/lib/firebase/authorization";
 import {
   assertSameOrigin,
   clientKey,
@@ -36,36 +38,57 @@ export async function POST(request: Request) {
     );
   }
 
-  const { email, password } = parsed.data;
+  const { email, password, idToken } = parsed.data;
 
   try {
-    const store = await getStore();
-    const user = await store.findAdminByEmail(email);
-
-    // Environment-configured accounts (useful before/without a users collection).
-    const envAdmin = envAdmins().find((candidate) => candidate.email === email);
-
-    let valid = false;
+    let uid: string | null = null;
     let name = "Administrator";
+    let valid = false;
 
-    if (user?.passwordHash) {
-      valid = await verifyPassword(password, user.passwordHash);
-      name = user.name;
-    } else if (envAdmin) {
-      valid = await verifyPassword(password, envAdmin.passwordHash);
-      name = envAdmin.name;
+    /* ---------------------------------------------------------------
+     * Firebase Authentication path (production).
+     * The client signs in with the Firebase JS SDK and posts the ID
+     * token; the server verifies it, then checks the `admins`
+     * collection for explicit authorisation.
+     * --------------------------------------------------------------- */
+    if (idToken) {
+      const decoded = await verifyIdToken(idToken);
+      if (decoded) {
+        const authorized = await isAdminAuthorized(decoded.uid, decoded.email ?? email);
+        if (authorized) {
+          valid = true;
+          uid = decoded.uid;
+          name = "Administrator";
+        }
+      }
+
+      if (!valid) {
+        return unauthorized("Email or password is incorrect.");
+      }
     } else {
-      await dummyVerify();
-    }
+      /* -------------------------------------------------------------
+       * Legacy path (works before/without Firebase credentials):
+       * environment-configured admin accounts with scrypt hashes.
+       * ------------------------------------------------------------- */
+      const envAdmin = envAdmins().find((candidate) => candidate.email === email);
 
-    if (!valid) {
-      return unauthorized("Email or password is incorrect.");
+      if (envAdmin) {
+        valid = await verifyPassword(password, envAdmin.passwordHash);
+        name = envAdmin.name;
+        uid = envAdmin.id;
+      } else {
+        await dummyVerify();
+      }
+
+      if (!valid) {
+        return unauthorized("Email or password is incorrect.");
+      }
     }
 
     resetRateLimit(key);
 
     const token = createSessionToken({
-      sub: user?.id ?? envAdmin?.id ?? "env-admin",
+      sub: uid ?? "env-admin",
       email,
       name,
     });
