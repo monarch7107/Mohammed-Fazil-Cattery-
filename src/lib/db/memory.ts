@@ -16,9 +16,9 @@ import {
  * Development / no-database fallback.
  *
  * Keeps the whole application functional (public pages + admin CRUD) while
- * MONGODB_URI is missing or unreachable, so the site is never a dead preview.
- * Data lives in process memory: it resets on restart and is never used when
- * MongoDB is configured.
+ * Firebase Admin credentials are missing or unreachable, so the site is never
+ * a dead preview. Data lives in process memory: it resets on restart and is
+ * never used when Firebase is configured.
  */
 
 interface MemoryDB {
