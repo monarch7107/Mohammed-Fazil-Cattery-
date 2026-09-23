@@ -10,7 +10,7 @@ import {
   notFound,
   serverError,
 } from "@/lib/auth/guard";
-import { removeImages } from "@/lib/storage";
+import { publicIdFromCloudinaryUrl, removeImages } from "@/lib/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,11 +59,11 @@ export async function DELETE(request: Request, { params }: Params) {
 
     const removed = await store.deleteGallery(id);
 
-    // Best-effort asset cleanup (no-op for placeholder records). The storage
-    // driver decides how to interpret the key: a Cloudinary public_id for
-    // cloud uploads, an /uploads/ path for local development files.
+    // Best-effort asset cleanup (no-op for placeholder records). Prefer the
+    // stored Cloudinary public_id; fall back to URL derivation for legacy
+    // records.
     if (removed) {
-      await removeImages([item.image]);
+      await removeImages([item.imageId ?? publicIdFromCloudinaryUrl(item.image ?? "") ?? item.image]);
     }
     return NextResponse.json({ ok: true });
   } catch (error) {
