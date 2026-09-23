@@ -55,6 +55,9 @@ function mapKitten(id: string, doc: Doc): Kitten {
     status: (doc.status as Kitten["status"]) ?? "available",
     price: typeof doc.price === "number" ? doc.price : null,
     images: Array.isArray(doc.images) ? doc.images.filter((v: unknown): v is string => Boolean(v)) : [],
+    imageIds: Array.isArray(doc.imageIds)
+      ? (doc.imageIds.filter((v: unknown): v is string => Boolean(v)) as string[])
+      : [],
     featured: Boolean(doc.featured),
     placeholder: Boolean(doc.placeholder),
     createdAt: toIso(doc.createdAt),
@@ -74,6 +77,7 @@ function mapProduct(id: string, doc: Doc): Product {
     price: typeof doc.price === "number" ? doc.price : null,
     description: typeof doc.description === "string" ? doc.description : "",
     image: typeof doc.image === "string" ? doc.image : null,
+    imageId: typeof doc.imageId === "string" ? doc.imageId : null,
     available: doc.available !== false,
     placeholder: Boolean(doc.placeholder),
     createdAt: toIso(doc.createdAt),
@@ -85,6 +89,7 @@ function mapGallery(id: string, doc: Doc): GalleryItem {
   return {
     id,
     image: typeof doc.image === "string" ? doc.image : null,
+    imageId: typeof doc.imageId === "string" ? doc.imageId : null,
     category: (doc.category as GalleryItem["category"]) ?? "cattery",
     caption: typeof doc.caption === "string" ? doc.caption : "",
     sortOrder: typeof doc.sortOrder === "number" ? doc.sortOrder : 0,

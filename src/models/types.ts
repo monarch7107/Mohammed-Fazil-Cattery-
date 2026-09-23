@@ -20,6 +20,8 @@ export interface Kitten {
   price: number | null;
   /** Empty array => the UI renders branded placeholders of the right crop. */
   images: string[];
+  /** Cloudinary public_ids, index-aligned with `images` (empty for local/placeholder). */
+  imageIds: string[];
   featured: boolean;
   /** True when this record is development placeholder content. */
   placeholder: boolean;
@@ -40,6 +42,8 @@ export interface Product {
   price: number | null;
   description: string;
   image: string | null;
+  /** Cloudinary public_id of `image` (null for local/placeholder images). */
+  imageId: string | null;
   available: boolean;
   placeholder: boolean;
   createdAt: string;
@@ -49,6 +53,8 @@ export interface Product {
 export interface GalleryItem {
   id: string;
   image: string | null;
+  /** Cloudinary public_id of `image` (null for local/placeholder images). */
+  imageId: string | null;
   category: GalleryCategory;
   caption: string;
   sortOrder: number;

@@ -10,7 +10,7 @@ import {
   serverError,
 } from "@/lib/auth/guard";
 import { kittenInputSchema, toKittenInput } from "@/lib/validation";
-import { removeImages } from "@/lib/storage";
+import { publicIdFromCloudinaryUrl, removeImages } from "@/lib/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -53,10 +53,15 @@ export async function PUT(request: Request, { params }: Params) {
     if (!kitten) return notFound("That kitten could not be found.");
 
     // Best-effort cleanup of images that were removed or replaced in this
-    // update (never blocks the response; no-op for placeholders).
+    // update (never blocks the response; no-op for placeholders). Prefer the
+    // stored Cloudinary public_ids; fall back to URL derivation for legacy
+    // records created before ids were persisted.
     const kept = new Set(kitten.images);
-    const dropped = previous.images.filter((url) => !kept.has(url));
-    await removeImages(dropped);
+    const droppedIds = previous.images
+      .map((url, index) => ({ url, id: previous.imageIds[index] ?? publicIdFromCloudinaryUrl(url) }))
+      .filter(({ url }) => !kept.has(url))
+      .map(({ url, id }) => id ?? url);
+    await removeImages(droppedIds);
 
     return NextResponse.json({ kitten });
   } catch (error) {
@@ -80,7 +85,10 @@ export async function DELETE(request: Request, { params }: Params) {
     if (!removed) return notFound("That kitten could not be found.");
 
     // Best-effort asset cleanup for the deleted record's images.
-    await removeImages(kitten.images);
+    const keys = kitten.images.map(
+      (url, index) => kitten.imageIds[index] ?? publicIdFromCloudinaryUrl(url) ?? url
+    );
+    await removeImages(keys);
 
     return NextResponse.json({ ok: true });
   } catch (error) {

@@ -10,7 +10,7 @@ import {
   serverError,
 } from "@/lib/auth/guard";
 import { productInputSchema, toProductInput } from "@/lib/validation";
-import { removeImages } from "@/lib/storage";
+import { publicIdFromCloudinaryUrl, removeImages } from "@/lib/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,7 +54,7 @@ export async function PUT(request: Request, { params }: Params) {
 
     // Best-effort cleanup when the product image was replaced.
     if (previous.image && product.image !== previous.image) {
-      await removeImages([previous.image]);
+      await removeImages([previous.imageId ?? publicIdFromCloudinaryUrl(previous.image) ?? previous.image]);
     }
 
     return NextResponse.json({ product });
@@ -79,7 +79,7 @@ export async function DELETE(request: Request, { params }: Params) {
     if (!removed) return notFound("That product could not be found.");
 
     // Best-effort asset cleanup for the deleted record's image.
-    await removeImages([product.image]);
+    await removeImages([product.imageId ?? publicIdFromCloudinaryUrl(product.image ?? "") ?? product.image]);
 
     return NextResponse.json({ ok: true });
   } catch (error) {

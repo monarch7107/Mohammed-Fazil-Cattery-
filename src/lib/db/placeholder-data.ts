@@ -32,6 +32,7 @@ export function placeholderKittens(): Kitten[] {
     status: entry.status,
     price: null,
     images: [],
+    imageIds: [],
     featured: index < 2,
     placeholder: true,
     createdAt: now(),
@@ -60,6 +61,7 @@ export function placeholderProducts(): Product[] {
     description:
       "Placeholder record. Replace it from Admin → Products with the real brand, pack size and price when you stock it.",
     image: null,
+    imageId: null,
     available: true,
     placeholder: true,
     createdAt: now(),
@@ -80,6 +82,7 @@ export function placeholderGallery(): GalleryItem[] {
   return base.map((entry, index) => ({
     id: slug("gallery-placeholder", index + 1),
     image: null,
+    imageId: null,
     category: entry.category,
     caption: entry.caption,
     sortOrder: index,
