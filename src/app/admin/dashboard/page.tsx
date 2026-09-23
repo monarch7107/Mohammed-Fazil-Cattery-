@@ -111,7 +111,7 @@ export default async function AdminDashboardPage() {
             ? "Firebase Admin credentials are not set, so data lives in memory and resets when the server restarts. "
             : ""}
           {!persistentStorage
-            ? "Image uploads are stored on local disk; configure Firebase Storage for production."
+            ? "Image uploads require Cloudinary (production storage); files would not persist."
             : null}
         </div>
       )}

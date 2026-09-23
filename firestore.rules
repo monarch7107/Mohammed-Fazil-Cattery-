@@ -6,6 +6,9 @@ rules_version = '2';
 // Admins: explicit `admins` documents authorise full write access.
 // Nobody: can read or modify `admins` directly from the client — admin
 //         membership is managed via the Admin SDK / console only.
+//
+// Images live in Cloudinary (server-side signed uploads from the Next.js
+// API layer); Firebase Storage is intentionally not part of this project.
 
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -14,17 +17,10 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isAdmin() {
-      return signedIn() &&
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin' &&
-        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true;
-    }
-
     // Admin membership: an explicit `admins/{uid}` document with
     // role == "admin" and active == true. The setup script creates one per
-    // admin account and attaches the same uid to the Auth user; the custom
-    // claim mirrors this for Storage rules.
+    // admin account; the `admin` custom claim mirrors it for defense in
+    // depth (claim + Firestore document must both agree).
     function isAdmin() {
       return signedIn() &&
         request.auth.token.admin == true &&
@@ -33,24 +29,20 @@ service cloud.firestore {
         get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true;
     }
 
-    function isCatteryAdmin() {
-      return isAdmin();
-    }
-
     // ---- Public content: world-readable, admin-writable ----------------
     match /kittens/{kittenId} {
       allow read: if true;
-      allow create, update, delete: if isCatteryAdmin();
+      allow create, update, delete: if isAdmin();
     }
 
     match /products/{productId} {
       allow read: if true;
-      allow create, update, delete: if isCatteryAdmin();
+      allow create, update, delete: if isAdmin();
     }
 
     match /gallery/{galleryId} {
       allow read: if true;
-      allow create, update, delete: if isCatteryAdmin();
+      allow create, update, delete: if isAdmin();
     }
 
     // ---- Admin registry: never readable or writable by clients ---------

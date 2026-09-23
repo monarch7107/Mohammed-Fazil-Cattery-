@@ -1,8 +1,6 @@
 import "server-only";
 
 import { getFirestore, type Firestore } from "firebase-admin/firestore";
-import { getStorage } from "firebase-admin/storage";
-import type { Bucket } from "@google-cloud/storage";
 import { adminApp, isFirebaseAdminConfigured } from "./admin-app";
 
 /**
@@ -15,6 +13,9 @@ import { adminApp, isFirebaseAdminConfigured } from "./admin-app";
  *
  * The SDK instance is cached on globalThis to survive HMR and reused across
  * warm serverless invocations.
+ *
+ * NOTE: Firebase Storage is intentionally NOT initialised — images are
+ * stored in Cloudinary (see src/lib/storage/index.ts).
  */
 
 export { isFirebaseAdminConfigured };
@@ -27,21 +28,6 @@ export function firestore(): Firestore | null {
     return getFirestore(app);
   } catch (error) {
     console.error("[firebase-admin] Firestore unavailable:", (error as Error).message);
-    return null;
-  }
-}
-
-/** Storage bucket handle bound to the project bucket, or null when unconfigured. */
-export function storage(): Bucket | null {
-  const app = adminApp();
-  if (!app) return null;
-  try {
-    const bucketName =
-      process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET?.trim() ||
-      `${process.env.FIREBASE_PROJECT_ID?.trim()}.appspot.com`;
-    return getStorage(app).bucket(bucketName);
-  } catch (error) {
-    console.error("[firebase-admin] Storage unavailable:", (error as Error).message);
     return null;
   }
 }

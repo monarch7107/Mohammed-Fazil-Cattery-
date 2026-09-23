@@ -10,7 +10,7 @@ import {
   notFound,
   serverError,
 } from "@/lib/auth/guard";
-import { activeDriver } from "@/lib/storage";
+import { removeImages } from "@/lib/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,13 +59,11 @@ export async function DELETE(request: Request, { params }: Params) {
 
     const removed = await store.deleteGallery(id);
 
-    // Best-effort cleanup of the stored file (no-op for placeholder records).
-    if (removed && item.image?.startsWith("/uploads/")) {
-      await activeDriver().remove(`${process.cwd()}/public${item.image}`).catch(() => undefined);
-    } else if (removed && item.image?.startsWith("https://storage.googleapis.com/")) {
-      // Firebase Storage object key is the path after the bucket name.
-      const withoutBucket = item.image.split("/").slice(4).join("/");
-      await activeDriver().remove(withoutBucket).catch(() => undefined);
+    // Best-effort asset cleanup (no-op for placeholder records). The storage
+    // driver decides how to interpret the key: a Cloudinary public_id for
+    // cloud uploads, an /uploads/ path for local development files.
+    if (removed) {
+      await removeImages([item.image]);
     }
     return NextResponse.json({ ok: true });
   } catch (error) {

@@ -5,72 +5,149 @@ import { createHash } from "node:crypto";
 import type { AcceptedMime } from "@/lib/images";
 
 /**
- * Storage abstraction.
+ * Storage abstraction — IMAGES.
  *
- * The frontend only ever receives a URL string, so switching the production
- * driver requires zero component changes — only environment variables.
+ * FINAL ARCHITECTURE: Cloudinary is the only production image storage.
+ * Firestore stores metadata (imageUrl / publicId / …); binaries live in
+ * Cloudinary. Firebase Storage is intentionally not used (the Firebase
+ * project would require Blaze billing for it).
  *
  * Drivers:
- *  - firebase    → Firebase Storage (production; folders kittens/ products/ gallery/)
- *  - local       → public/uploads on disk (development only)
- *  - cloudinary  → Cloudinary (legacy alternative, still available)
+ *  - cloudinary → production (folders kittens/ products/ gallery/)
+ *  - local      → development only (public/uploads on disk)
  */
 
 export interface StoredImage {
-  /** Public URL used directly in <img>/next/image. */
+  /** Public delivery URL used directly in <img>/next/image. */
   url: string;
-  /** Opaque key used to delete the object later. */
+  /**
+   * Opaque identifier used to delete the asset later. For Cloudinary this is
+   * the `public_id`; for local storage it is the absolute file path.
+   */
   key: string;
+  /** Driver that produced the stored image (drives deletion handling). */
+  driver: "cloudinary" | "local";
 }
 
 export interface ImageStorageDriver {
-  readonly name: "firebase" | "local" | "cloudinary";
+  readonly name: "cloudinary" | "local";
   save(bytes: Uint8Array, mime: AcceptedMime, folder?: string): Promise<StoredImage>;
   remove(key: string): Promise<void>;
 }
 
-/* ------------------------------ Firebase -------------------------- */
+/* ----------------------------- Cloudinary ------------------------- */
 
-const FIREBASE_FOLDERS = new Set(["kittens", "products", "gallery", "misc"]);
+const CLOUDINARY_FOLDERS = new Set(["kittens", "products", "gallery", "misc"]);
+
+function cloudName(): string | null {
+  return process.env.CLOUDINARY_CLOUD_NAME?.trim() || null;
+}
+
+function apiKey(): string | null {
+  return process.env.CLOUDINARY_API_KEY?.trim() || null;
+}
+
+function apiSecret(): string | null {
+  return process.env.CLOUDINARY_API_SECRET?.trim() || null;
+}
+
+/**
+ * CLOUDINARY_URL=cloudinary://<api_key>:<api_secret>@<cloud_name> is also
+ * accepted (server-only). It is parsed, never logged, and the three
+ * individual variables take precedence when both are provided.
+ */
+function credentials(): { cloud: string; key: string; secret: string } | null {
+  const cloud = cloudName();
+  const key = apiKey();
+  const secret = apiSecret();
+  if (cloud && key && secret) return { cloud, key, secret };
+
+  const url = process.env.CLOUDINARY_URL?.trim();
+  if (url) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === "cloudinary:" && parsed.username && parsed.password && parsed.hostname) {
+        return { cloud: parsed.hostname, key: parsed.username, secret: parsed.password };
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  return null;
+}
+
+/** True when Cloudinary credentials are present (checked without logging). */
+export function isCloudinaryConfigured(): boolean {
+  return credentials() !== null;
+}
+
+/** Folder allowlist shared with the upload endpoint. */
+export const UPLOAD_FOLDERS = [...CLOUDINARY_FOLDERS] as const;
 
 function safeFolder(folder?: string | null): string {
   const candidate = folder?.trim().toLowerCase();
-  return candidate && FIREBASE_FOLDERS.has(candidate) ? candidate : "misc";
+  return candidate && CLOUDINARY_FOLDERS.has(candidate) ? candidate : "misc";
 }
 
-const firebaseDriver: ImageStorageDriver = {
-  name: "firebase",
+function cloudinarySignature(params: Record<string, string>, secret: string): string {
+  const toSign = Object.keys(params)
+    .sort()
+    .map((key) => `${key}=${params[key]}`)
+    .join("&");
+  return createHash("sha1").update(toSign + secret).digest("hex");
+}
+
+const cloudinaryDriver: ImageStorageDriver = {
+  name: "cloudinary",
+
   async save(bytes, mime, folder) {
-    const { storage } = await import("@/lib/firebase/admin");
-    const bucket = storage();
-    if (!bucket) throw new Error("Firebase Storage is not configured");
+    const creds = credentials();
+    if (!creds) throw new Error("Cloudinary is not configured");
 
     const dir = safeFolder(folder);
-    const ext = mime === "image/jpeg" ? "jpg" : mime.split("/")[1];
-    const filePath = `${dir}/${Date.now().toString(36)}-${randomUUID().slice(0, 8)}.${ext}`;
-    const fileRef = bucket.file(filePath);
+    const endpoint = `https://api.cloudinary.com/v1_1/${creds.cloud}/image/upload`;
 
-    await fileRef.save(Buffer.from(bytes), {
-      contentType: mime,
-      resumable: false,
-      metadata: { cacheControl: "public, max-age=31536000, immutable" },
-    });
-    await fileRef.makePublic().catch(() => undefined);
+    // Server-side SIGNED upload: the API secret never leaves the server and
+    // is not part of any request — only its SHA-1 signature is.
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const params: Record<string, string> = { folder: `cattery/${dir}`, timestamp };
+    const signature = cloudinarySignature(params, creds.secret);
 
-    return {
-      url: `https://storage.googleapis.com/${bucket.name}/${filePath}`,
-      key: filePath,
-    };
+    const form = new FormData();
+    form.append("file", new Blob([bytes as unknown as BlobPart], { type: mime }), `image.${mime.split("/")[1]}`);
+    form.append("folder", params.folder);
+    form.append("api_key", creds.key);
+    form.append("timestamp", timestamp);
+    form.append("signature", signature);
+
+    const response = await fetch(endpoint, { method: "POST", body: form });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => "");
+      throw new Error(`Cloudinary upload failed (${response.status}): ${detail.slice(0, 200)}`);
+    }
+
+    const result = (await response.json()) as { secure_url: string; public_id: string };
+    return { url: result.secure_url, key: result.public_id, driver: "cloudinary" };
   },
 
   async remove(key) {
-    const { storage } = await import("@/lib/firebase/admin");
-    const bucket = storage();
-    if (!bucket || !key) return;
-    // Only delete object paths inside the managed folders.
-    const dir = key.split("/")[0];
-    if (!FIREBASE_FOLDERS.has(dir)) return;
-    await bucket.file(key).delete({ ignoreNotFound: true }).catch(() => undefined);
+    const creds = credentials();
+    if (!creds || !key) return;
+
+    const timestamp = Math.floor(Date.now() / 1000).toString();
+    const params: Record<string, string> = { public_id: key, timestamp };
+    const signature = cloudinarySignature(params, creds.secret);
+
+    const form = new FormData();
+    form.append("public_id", key);
+    form.append("api_key", creds.key);
+    form.append("timestamp", timestamp);
+    form.append("signature", signature);
+
+    await fetch(`https://api.cloudinary.com/v1_1/${creds.cloud}/image/destroy`, {
+      method: "POST",
+      body: form,
+    });
   },
 };
 
@@ -94,6 +171,7 @@ const localDriver: ImageStorageDriver = {
     return {
       url: `/uploads/${dateFolder()}/${filename}`,
       key: path.join(folder, filename),
+      driver: "local",
     };
   },
   async remove(key) {
@@ -104,103 +182,85 @@ const localDriver: ImageStorageDriver = {
   },
 };
 
-/* ----------------------------- Cloudinary ------------------------- */
-
-function cloudName(): string | null {
-  return process.env.CLOUDINARY_CLOUD_NAME?.trim() || null;
-}
-
-function cloudinarySignature(params: Record<string, string>): string {
-  const secret = process.env.CLOUDINARY_API_SECRET;
-  if (!secret) throw new Error("CLOUDINARY_API_SECRET is not configured");
-  const toSign = Object.keys(params)
-    .sort()
-    .map((key) => `${key}=${params[key]}`)
-    .join("&");
-  return createHash("sha1").update(toSign + secret).digest("hex");
-}
-
-const cloudinaryDriver: ImageStorageDriver = {
-  name: "cloudinary",
-  async save(bytes, mime) {
-    const cloud = cloudName();
-    if (!cloud) throw new Error("CLOUDINARY_CLOUD_NAME is not configured");
-
-    const endpoint = `https://api.cloudinary.com/v1_1/${cloud}/image/upload`;
-    const form = new FormData();
-    const folder = "cattery";
-    const preset = process.env.CLOUDINARY_UPLOAD_PRESET?.trim();
-    const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
-
-    form.append("file", new Blob([bytes as unknown as BlobPart], { type: mime }), `image.${mime.split("/")[1]}`);
-    form.append("folder", folder);
-
-    if (preset) {
-      form.append("upload_preset", preset);
-    } else if (apiKey) {
-      const timestamp = Math.floor(Date.now() / 1000).toString();
-      const params = { folder, timestamp };
-      form.append("api_key", apiKey);
-      form.append("timestamp", timestamp);
-      form.append("signature", cloudinarySignature(params));
-    } else {
-      throw new Error("Configure CLOUDINARY_UPLOAD_PRESET or CLOUDINARY_API_SECRET");
-    }
-
-    const response = await fetch(endpoint, { method: "POST", body: form });
-    if (!response.ok) {
-      const detail = await response.text().catch(() => "");
-      throw new Error(`Cloudinary upload failed (${response.status}): ${detail.slice(0, 200)}`);
-    }
-
-    const result = (await response.json()) as { secure_url: string; public_id: string };
-    return { url: result.secure_url, key: result.public_id };
-  },
-
-  async remove(key) {
-    const cloud = cloudName();
-    const apiKey = process.env.CLOUDINARY_API_KEY?.trim();
-    if (!cloud || !apiKey) return;
-
-    const timestamp = Math.floor(Date.now() / 1000).toString();
-    const params = { public_id: key, timestamp };
-    const form = new FormData();
-    form.append("public_id", key);
-    form.append("timestamp", timestamp);
-    form.append("api_key", apiKey);
-    form.append("signature", cloudinarySignature(params));
-
-    await fetch(`https://api.cloudinary.com/v1_1/${cloud}/destroy`, { method: "POST", body: form });
-  },
-};
-
 /* ------------------------------ Resolver -------------------------- */
 
 /**
  * Driver selection:
- *  1. IMAGE_STORAGE_DRIVER forces a specific driver when set.
- *  2. Firebase Admin credentials present → Firebase Storage (the default
- *     production driver for this project).
- *  3. Otherwise the local disk driver (development).
+ *  1. IMAGE_STORAGE_DRIVER=cloudinary|local forces a driver when set.
+ *  2. Cloudinary credentials present → Cloudinary (the production driver).
+ *  3. Otherwise local disk (development without credentials).
  */
 export function activeDriver(): ImageStorageDriver {
   const configured = process.env.IMAGE_STORAGE_DRIVER?.trim();
-  if (configured === "firebase") return firebaseDriver;
   if (configured === "cloudinary") return cloudinaryDriver;
   if (configured === "local") return localDriver;
 
-  const hasFirebase =
-    Boolean(process.env.FIREBASE_PROJECT_ID?.trim()) &&
-    Boolean(process.env.FIREBASE_CLIENT_EMAIL?.trim()) &&
-    Boolean(process.env.FIREBASE_PRIVATE_KEY?.trim());
-  if (hasFirebase) return firebaseDriver;
-
+  if (isCloudinaryConfigured()) return cloudinaryDriver;
   return localDriver;
 }
 
 export function storageIsPersistent(): boolean {
-  return activeDriver().name !== "local";
+  return activeDriver().name === "cloudinary";
 }
 
-/** Folder allowlist shared with the upload endpoint. */
-export const UPLOAD_FOLDERS = [...FIREBASE_FOLDERS] as const;
+/**
+ * Best-effort deletion of stored assets whose identifiers appear in
+ * document payloads.
+ *
+ * Firestore stores image metadata as URL strings (the Cloudinary `secure_url`),
+ * so deletion resolves each value into the asset key the active driver
+ * understands:
+ *  - a Cloudinary delivery URL  → the embedded public_id (`cattery/<folder>/<id>`)
+ *  - a bare public_id           → passed to Cloudinary as-is
+ *  - an /uploads/… dev path     → the local file under public/
+ *
+ * Unrecognised values (e.g. legacy remote URLs) are skipped silently —
+ * cleanup is always best-effort and never blocks the record operation.
+ */
+export async function removeImages(
+  keys: Array<string | null | undefined>
+): Promise<void> {
+  const driver = activeDriver();
+
+  const resolved = keys
+    .filter((key): key is string => Boolean(key && key.trim()))
+    .map((key) => key.trim())
+    .map((key) => {
+      if (key.startsWith("https://res.cloudinary.com/")) {
+        return publicIdFromCloudinaryUrl(key);
+      }
+      if (key.startsWith("/uploads/") && driver.name === "local") {
+        // Local driver keys are absolute paths inside public/.
+        return `${process.cwd()}/public${key}`;
+      }
+      return key;
+    })
+    .filter((key): key is string => Boolean(key));
+
+  await Promise.all(resolved.map((key) => driver.remove(key).catch(() => undefined)));
+}
+
+/**
+ * Extract the public_id from a Cloudinary delivery URL.
+ *
+ * Matches the plain upload URLs this app produces:
+ *   https://res.cloudinary.com/<cloud>/image/upload/[v\d+/]<public_id>.<ext>
+ * Returns null for URLs it cannot interpret confidently.
+ */
+export function publicIdFromCloudinaryUrl(url: string): string | null {
+  try {
+    const { pathname } = new URL(url);
+    const marker = "/image/upload/";
+    const start = pathname.indexOf(marker);
+    if (start === -1) return null;
+
+    let tail = pathname.slice(start + marker.length);
+    // Optional version segment (v1234567890).
+    tail = tail.replace(/^v\d+\//, "");
+    // Optional file extension.
+    tail = tail.replace(/\.[a-z0-9]+$/i, "");
+    return tail || null;
+  } catch {
+    return null;
+  }
+}

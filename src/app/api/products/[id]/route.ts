@@ -10,6 +10,7 @@ import {
   serverError,
 } from "@/lib/auth/guard";
 import { productInputSchema, toProductInput } from "@/lib/validation";
+import { removeImages } from "@/lib/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,8 +46,17 @@ export async function PUT(request: Request, { params }: Params) {
 
   try {
     const store = await getStore();
+    const previous = await store.getProduct(id);
+    if (!previous) return notFound("That product could not be found.");
+
     const product = await store.updateProduct(id, toProductInput(parsed.data));
     if (!product) return notFound("That product could not be found.");
+
+    // Best-effort cleanup when the product image was replaced.
+    if (previous.image && product.image !== previous.image) {
+      await removeImages([previous.image]);
+    }
+
     return NextResponse.json({ product });
   } catch (error) {
     console.error("[api/products/:id] PUT failed", error);
@@ -62,8 +72,15 @@ export async function DELETE(request: Request, { params }: Params) {
   const { id } = await params;
   try {
     const store = await getStore();
+    const product = await store.getProduct(id);
+    if (!product) return notFound("That product could not be found.");
+
     const removed = await store.deleteProduct(id);
     if (!removed) return notFound("That product could not be found.");
+
+    // Best-effort asset cleanup for the deleted record's image.
+    await removeImages([product.image]);
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("[api/products/:id] DELETE failed", error);

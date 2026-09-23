@@ -2,17 +2,12 @@
 /**
  * Firebase setup for Mohammed Fazil Cattery.
  *
- * Creates/updates EXACTLY TWO admin accounts and seeds starter content:
+ * Creates/updates EXACTLY the provided admin accounts and seeds starter content.
+ * The two production admin users already exist in Firebase Authentication —
+ * pass their emails with matching passwords only to refresh credentials or
+ * claims; the script never creates duplicates (it updates by email lookup).
+ * Run it once, locally, with server credentials — never in CI or on deploy.
  *
- *   1. Firebase Auth users for ADMIN_EMAIL and OWNER_EMAIL
- *      (passwords come from env/CLI at run time — never committed anywhere)
- *   2. `admin: true` custom claim on both users (used by Storage rules)
- *   3. `admins/{uid}` documents — { uid, email, role: "admin", active: true }
- *      (used by Firestore rules and by the app's authorisation check)
- *   4. Optionally seeds clearly-labelled placeholder content when the
- *      collections are empty (unless --no-seed or SEED_ON_EMPTY=false)
- *
- * Usage:
  *   FIREBASE_PROJECT_ID=... FIREBASE_CLIENT_EMAIL=... FIREBASE_PRIVATE_KEY="..." \
  *   ADMIN_EMAIL="admin@example.com" ADMIN_PASSWORD="..." \
  *   OWNER_EMAIL="owner@example.com" OWNER_PASSWORD="..." \
@@ -198,10 +193,8 @@ if (seedContent) {
   } else {
     console.log("• gallery already present — skipped");
   }
-}
-
-console.log(
-  "\nFirebase setup complete.\n" +
-    "Both accounts can now sign in at /admin and manage the site.\n" +
-    "Remember to deploy the security rules: firebase deploy --only firestore:rules,storage:rules\n"
-);
+}  console.log(
+    "\nFirebase setup complete.\n" +
+      "Both accounts can now sign in at /admin and manage the site.\n" +
+      "Remember to deploy the security rules: firebase deploy --only firestore:rules,firestore:indexes\n"
+  );

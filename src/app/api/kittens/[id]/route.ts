@@ -10,6 +10,7 @@ import {
   serverError,
 } from "@/lib/auth/guard";
 import { kittenInputSchema, toKittenInput } from "@/lib/validation";
+import { removeImages } from "@/lib/storage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,8 +46,18 @@ export async function PUT(request: Request, { params }: Params) {
 
   try {
     const store = await getStore();
+    const previous = await store.getKitten(id);
+    if (!previous) return notFound("That kitten could not be found.");
+
     const kitten = await store.updateKitten(id, toKittenInput(parsed.data));
     if (!kitten) return notFound("That kitten could not be found.");
+
+    // Best-effort cleanup of images that were removed or replaced in this
+    // update (never blocks the response; no-op for placeholders).
+    const kept = new Set(kitten.images);
+    const dropped = previous.images.filter((url) => !kept.has(url));
+    await removeImages(dropped);
+
     return NextResponse.json({ kitten });
   } catch (error) {
     console.error("[api/kittens/:id] PUT failed", error);
@@ -62,8 +73,15 @@ export async function DELETE(request: Request, { params }: Params) {
   const { id } = await params;
   try {
     const store = await getStore();
+    const kitten = await store.getKitten(id);
+    if (!kitten) return notFound("That kitten could not be found.");
+
     const removed = await store.deleteKitten(id);
     if (!removed) return notFound("That kitten could not be found.");
+
+    // Best-effort asset cleanup for the deleted record's images.
+    await removeImages(kitten.images);
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error("[api/kittens/:id] DELETE failed", error);

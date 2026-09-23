@@ -16,8 +16,8 @@ export type ListGalleryFilter = { category?: GalleryCategory };
 
 /**
  * Storage contract. The public site and the admin panel only ever talk to
- * this interface, so swapping MongoDB for Firestore (or running the in-memory
- * development driver) never touches a single component.
+ * this interface, so running against Firestore (or the clearly-labelled
+ * in-memory development driver) never touches a single component.
  */
 export interface DataStore {
   readonly mode: "firebase" | "memory";
