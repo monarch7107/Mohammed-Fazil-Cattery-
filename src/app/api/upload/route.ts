@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { validateImage, ACCEPTED_MIME, type AcceptedMime } from "@/lib/images";
-import { activeDriver, UPLOAD_FOLDERS } from "@/lib/storage";
+import { activeDriver, isCloudinaryConfigured, UPLOAD_FOLDERS } from "@/lib/storage";
 import {
   requireAdmin,
   assertSameOrigin,
@@ -22,6 +22,19 @@ export async function POST(request: Request) {
 
   const session = await requireAdmin();
   if (!session) return unauthorized();
+
+  // Image binaries belong in Cloudinary (production). Without credentials the
+  // local dev driver would silently persist nothing durable on Vercel, so the
+  // upload endpoint fails loudly instead of pretending success.
+  if (!isCloudinaryConfigured()) {
+    return NextResponse.json(
+      {
+        error:
+          "Image storage is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET (server-only).",
+      },
+      { status: 503 }
+    );
+  }
 
   let form: FormData;
   try {
@@ -54,10 +67,12 @@ export async function POST(request: Request) {
     const driver = activeDriver();
     const stored = await driver.save(buffer, validation.mime as AcceptedMime, folder);
 
+    // `key` is the Cloudinary public_id — store it alongside the URL so the
+    // asset can be destroyed when the record is deleted or replaced.
     return NextResponse.json({
       url: stored.url,
       key: stored.key,
-      driver: driver.name,
+      driver: stored.driver,
       width: validation.width,
       height: validation.height,
       bytes: validation.bytes,

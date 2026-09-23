@@ -47,7 +47,7 @@ Browser
 Next.js 15 Route Handlers  (/api/*)
   ├─ zod validation on every write
   ├─ session guard + same-origin check + rate limits
-  └─ storage driver (Firebase Storage · local · Cloudinary)
+  └─ Cloudinary (image storage · server-side signed uploads)
   │
   ▼
 DataStore interface  (src/lib/db/types.ts)
@@ -70,7 +70,7 @@ strings for images, so the storage driver can change without touching any form.
 | 3D | Three.js + React Three Fiber 9 (+ drei), procedural GLTF-free model |
 | Database | Firebase Firestore (Admin SDK), zod-validated documents |
 | Auth | Firebase Authentication (ID-token exchange) with signed httpOnly session cookie |
-| Storage | Firebase Storage (managed folders), local disk (dev) and Cloudinary (legacy) |
+| Images | Cloudinary (kittens/ products/ gallery/ folders, signed server-side uploads); local disk (dev only) |
 | Deployment | Vercel (or Freebuff-managed hosting) |
 
 Brand tokens live in `tailwind.config.ts` + `src/app/globals.css`:
@@ -100,12 +100,12 @@ src/
     db/         store contract, Firestore driver, memory driver, placeholder data
     firebase/   client config · Admin SDK (server-only) · auth · authorization
     auth/       password (legacy fallback) · session · guard · page-guard
-    storage/    Firebase Storage + local + Cloudinary drivers
+    storage/    Cloudinary driver + local (dev) driver
     admin/      fetch wrapper with upload progress
     site.ts  whatsapp.ts  data.ts  validation.ts  images.ts  utils.ts
   models/       types.ts (Kitten/Product/Gallery/AdminUser) · schemas.ts (zod)
 scripts/        firebase-setup.mjs (two admin accounts + seed) · hash-password.mjs
-firebase.json   firestore.rules  storage.rules  firestore.indexes.json
+firebase.json   firestore.rules  firestore.indexes.json
 env.example     environment template (copy to .env.local)
 ```
 
@@ -125,7 +125,10 @@ using an in-memory store seeded with clearly-labelled placeholder records.
 ## Firebase setup
 
 The backend uses **Firebase Authentication** (admin sign-in), **Firestore** (content) and
-**Firebase Storage** (images). One free Spark project covers it.
+**Cloudinary** (images). One free Spark project covers the Firebase side.
+
+> Images are stored in **Cloudinary**, not Firebase Storage (which would require
+> Blaze billing on this project). Firestore keeps only metadata.
 
 1. Create a project at the [Firebase Console](https://console.firebase.google.com) (e.g.
    `mohammed-fazil-cattery`), then add a **Web app** (`</>` icon) to get the client config.
@@ -158,7 +161,7 @@ FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY----
    Firestore → Rules and Storage → Rules):
    ```bash
    npm i -g firebase-tools && firebase login
-   firebase deploy --only firestore:rules,firestore:indexes,storage:rules
+   firebase deploy --only firestore:rules,firestore:indexes
    ```
 
 **Collections:** `admins`, `kittens`, `products`, `gallery`.
@@ -201,16 +204,19 @@ they are never stored in the repo or in Firestore.
 
 Admin capabilities: dashboard statistics, kitten CRUD, product CRUD, gallery upload / caption /
 category / reorder / delete. Every admin route and write endpoint is protected server-side, and
-Firestore/Storage rules enforce authorisation at the database layer too.
+Firestore rules enforce authorisation at the database layer too.
 
 ## Image upload setup
 
 **Development** — `IMAGE_STORAGE_DRIVER=local` writes to `public/uploads/YYYY/MM/…`.
 
-**Production** — Firebase Storage (the default once the Firebase Admin credentials exist):
-uploads land in the managed folders `kittens/`, `products/`, `gallery/` and are made public with
-immutable cache headers. Force it explicitly with `IMAGE_STORAGE_DRIVER=firebase`. A legacy
-Cloudinary driver is also still available.
+**Production** — Cloudinary (the default once `CLOUDINARY_CLOUD_NAME`,
+`CLOUDINARY_API_KEY` and `CLOUDINARY_API_SECRET` — or `CLOUDINARY_URL` — are set).
+Uploads are **server-side signed** (the API secret never reaches the browser) and land
+in the managed folders `kittens/`, `products/`, `gallery/`. Deleting or replacing a
+record destroys the corresponding Cloudinary asset best-effort. `CLOUDINARY_URL`
+(cloudinary://key:secret@cloud) is accepted as a single-variable alternative and stays
+server-only.
 
 Changing the driver requires **no frontend changes** — forms emit URL strings only.
 
@@ -233,7 +239,7 @@ See `env.example` for the complete, commented list. Highlights:
 | `FIREBASE_PROJECT_ID` / `FIREBASE_CLIENT_EMAIL` / `FIREBASE_PRIVATE_KEY` | Server-only Admin SDK credentials. Unset → in-memory development store. |
 | `AUTH_SECRET` | Session cookie signing (mandatory in production). |
 | `ADMIN_EMAIL` + `ADMIN_PASSWORD_HASH` / `OWNER_EMAIL` + `OWNER_PASSWORD_HASH` | Legacy env admin fallback (before/without Firebase). |
-| `IMAGE_STORAGE_DRIVER` | `firebase` \| `local` \| `cloudinary` (auto-detects Firebase when unset). |
+| `IMAGE_STORAGE_DRIVER` | `cloudinary` \| `local` (auto-detects Cloudinary when unset). |
 
 ## 3D cat architecture
 
@@ -373,8 +379,8 @@ CatCompanion (fixed dock, lazy, aria-hidden, decorative)
    restart (by design; it keeps development possible).
 2. **Rate limiting is per-instance** — on serverless this is per-lambda, not global. Move to
    Redis/Upstash for hard guarantees.
-3. **Local image storage is ephemeral on serverless** — use the Firebase Storage driver in
-   production.
+3. **Local image storage is ephemeral on serverless** — configure Cloudinary for
+   production uploads (the upload API fails closed with 503 without it).
 4. **No GraphQL/tRPC** — plain route handlers keep the API Vercel-friendly but untyped end-to-end.
 5. **No email channel** — the business communicates by WhatsApp/phone, so there is no contact
    form backend (and no invented inbox).
@@ -398,12 +404,13 @@ CatCompanion (fixed dock, lazy, aria-hidden, decorative)
 - [ ] Firebase project created; the `NEXT_PUBLIC_FIREBASE_*` set filled in
 - [ ] `FIREBASE_PROJECT_ID` + `FIREBASE_CLIENT_EMAIL` + `FIREBASE_PRIVATE_KEY` set (server-only)
 - [ ] Both admin accounts provisioned (`npm run firebase-setup`); passwords are strong
-- [ ] Security rules deployed (`firebase deploy --only firestore:rules,storage:rules`)
+- [ ] Security rules deployed (`firebase deploy --only firestore:rules,firestore:indexes`)
 - [ ] `AUTH_SECRET` set (32+ chars) — app refuses sessions without it in production
 - [ ] `NEXT_PUBLIC_SITE_URL` set to the real domain (sitemap/OG/canonical)
 - [ ] `NEXT_PUBLIC_WHATSAPP_NUMBER`, `NEXT_PUBLIC_PHONE`, `NEXT_PUBLIC_INSTAGRAM_URL` filled in
 - [ ] `NEXT_PUBLIC_BUSINESS_ADDRESS` set only if verified — otherwise leave empty
-- [ ] `IMAGE_STORAGE_DRIVER=firebase` (or unset — auto-detected)
+- [ ] Cloudinary credentials set (`CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` /
+      `CLOUDINARY_API_SECRET`, or `CLOUDINARY_URL`) — server-only
 - [ ] Placeholder records replaced or deleted; `SEED_ON_EMPTY=false`
 - [ ] `tsc --noEmit` passes; `next build` succeeds
 - [ ] Checked at 320 / 375 / 390 / 430 / 768 / 1024 / 1440 px

@@ -3,7 +3,7 @@
  *
  * These values are public identifiers (not secrets) — Firebase web API keys
  * identify the project and are safe to expose. Real authorization happens
- * server-side: Firestore/Storage rules plus the Next.js API layer.
+ * server-side: Firestore rules plus the Next.js API layer.
  */
 
 const value = (key: string): string | undefined => process.env[key]?.trim() || undefined;
