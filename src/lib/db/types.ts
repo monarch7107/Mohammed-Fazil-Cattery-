@@ -16,11 +16,11 @@ export type ListGalleryFilter = { category?: GalleryCategory };
 
 /**
  * Storage contract. The public site and the admin panel only ever talk to
- * this interface, so running against Firestore (or the clearly-labelled
- * in-memory development driver) never touches a single component.
+ * this interface, so running against PostgreSQL/Supabase (or the clearly-
+ * labelled in-memory development driver) never touches a single component.
  */
 export interface DataStore {
-  readonly mode: "firebase" | "memory";
+  readonly mode: "postgres" | "memory";
 
   listKittens(filter?: ListKittenFilter): Promise<Kitten[]>;
   getKitten(id: string): Promise<Kitten | null>;

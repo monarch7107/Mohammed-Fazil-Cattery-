@@ -8,9 +8,8 @@ import type { AcceptedMime } from "@/lib/images";
  * Storage abstraction — IMAGES.
  *
  * FINAL ARCHITECTURE: Cloudinary is the only production image storage.
- * Firestore stores metadata (imageUrl / publicId / …); binaries live in
- * Cloudinary. Firebase Storage is intentionally not used (the Firebase
- * project would require Blaze billing for it).
+ * PostgreSQL (Supabase) stores metadata (imageUrl / publicId / …); binaries
+ * live in Cloudinary. Supabase Storage is intentionally not used.
  *
  * Drivers:
  *  - cloudinary → production (folders kittens/ products/ gallery/)
@@ -207,7 +206,7 @@ export function storageIsPersistent(): boolean {
  * Best-effort deletion of stored assets whose identifiers appear in
  * document payloads.
  *
- * Firestore stores image metadata as URL strings (the Cloudinary `secure_url`),
+ * PostgreSQL stores image metadata as URL strings (the Cloudinary `secure_url`),
  * so deletion resolves each value into the asset key the active driver
  * understands:
  *  - a Cloudinary delivery URL  → the embedded public_id (`cattery/<folder>/<id>`)

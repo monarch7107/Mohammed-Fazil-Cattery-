@@ -24,7 +24,7 @@ export function ImageUploader({
   multiple?: boolean;
   label?: string;
   hint?: string;
-  /** Managed storage folder (Firebase Storage path). */
+  /** Managed storage folder (Cloudinary folder name). */
   folder?: "kittens" | "products" | "gallery" | "misc";
 }) {
   const inputRef = useRef<HTMLInputElement>(null);

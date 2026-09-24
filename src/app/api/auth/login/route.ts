@@ -1,10 +1,7 @@
 import { NextResponse } from "next/server";
-import { getStore } from "@/lib/db";
-import { verifyPassword, dummyVerify } from "@/lib/auth/password";
-import { envAdmins } from "@/lib/auth/env-admins";
+import { verifyAccessToken } from "@/lib/supabase/admin";
+import { isAdminAuthorized } from "@/lib/supabase/authorization";
 import { createSessionToken, setSessionCookie } from "@/lib/auth/session";
-import { verifyIdToken } from "@/lib/firebase/auth";
-import { isAdminAuthorized } from "@/lib/firebase/authorization";
 import {
   assertSameOrigin,
   clientKey,
@@ -18,6 +15,15 @@ import { loginSchema } from "@/lib/validation";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * Supabase Authentication login.
+ *
+ * The client signs in with the Supabase JS SDK (email + password) and posts
+ * the resulting access token; the server verifies it against Supabase Auth,
+ * confirms the user is an explicitly-authorised admin (active `admins` row),
+ * and issues the existing signed httpOnly session cookie used by every
+ * guard in the app. Client-supplied roles are never trusted.
+ */
 export async function POST(request: Request) {
   if (!assertSameOrigin(request)) return forbidden();
 
@@ -38,63 +44,41 @@ export async function POST(request: Request) {
     );
   }
 
-  const { email, password, idToken } = parsed.data;
+  const { email, password, accessToken } = parsed.data;
 
   try {
-    let uid: string | null = null;
-    let name = "Administrator";
-    let valid = false;
+    if (!accessToken) {
+      // The login form always authenticates with Supabase Auth first; a
+      // password-only POST is only meaningful for the legacy env-admin path,
+      // which no longer exists. Same generic error as a bad credential.
+      return unauthorized("Email or password is incorrect.");
+    }
 
-    /* ---------------------------------------------------------------
-     * Firebase Authentication path (production).
-     * The client signs in with the Firebase JS SDK and posts the ID
-     * token; the server verifies it, then checks the `admins`
-     * collection for explicit authorisation.
-     * --------------------------------------------------------------- */
-    if (idToken) {
-      const decoded = await verifyIdToken(idToken);
-      if (decoded) {
-        const authorized = await isAdminAuthorized(decoded.uid, decoded.email ?? email);
-        if (authorized) {
-          valid = true;
-          uid = decoded.uid;
-          name = "Administrator";
-        }
-      }
+    const user = await verifyAccessToken(accessToken);
+    if (!user) {
+      return unauthorized("Email or password is incorrect.");
+    }
 
-      if (!valid) {
-        return unauthorized("Email or password is incorrect.");
-      }
-    } else {
-      /* -------------------------------------------------------------
-       * Legacy path (works before/without Firebase credentials):
-       * environment-configured admin accounts with scrypt hashes.
-       * ------------------------------------------------------------- */
-      const envAdmin = envAdmins().find((candidate) => candidate.email === email);
-
-      if (envAdmin) {
-        valid = await verifyPassword(password, envAdmin.passwordHash);
-        name = envAdmin.name;
-        uid = envAdmin.id;
-      } else {
-        await dummyVerify();
-      }
-
-      if (!valid) {
-        return unauthorized("Email or password is incorrect.");
-      }
+    const authorized = await isAdminAuthorized(user.id);
+    if (!authorized) {
+      // Valid Supabase user, but not an authorised admin.
+      return unauthorized("Email or password is incorrect.");
     }
 
     resetRateLimit(key);
 
+    const name =
+      (typeof user.user_metadata?.name === "string" && user.user_metadata.name) ||
+      "Administrator";
+
     const token = createSessionToken({
-      sub: uid ?? "env-admin",
-      email,
+      sub: user.id,
+      email: user.email ?? email,
       name,
     });
     await setSessionCookie(token);
 
-    return NextResponse.json({ ok: true, email, name });
+    return NextResponse.json({ ok: true, email: user.email ?? email, name });
   } catch (error) {
     console.error("[api/auth/login] failed", error);
     return NextResponse.json(
