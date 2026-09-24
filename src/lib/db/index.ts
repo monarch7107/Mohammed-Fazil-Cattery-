@@ -1,6 +1,6 @@
 import type { DataStore } from "@/lib/db/types";
-import { isFirebaseAdminConfigured } from "@/lib/firebase/admin-app";
-import { firestoreStore } from "@/lib/db/firestore";
+import { isSupabaseAdminConfigured } from "@/lib/supabase/admin";
+import { postgresStore } from "@/lib/db/postgres";
 import { memoryStore } from "@/lib/db/memory";
 
 export type { DataStore } from "@/lib/db/types";
@@ -15,7 +15,7 @@ function isProduction(): boolean {
   // VERCEL_ENV is set to "production" by Vercel only in the real production
   // deployment. A plain NODE_ENV=production process (CI smoke tests, a local
   // `next start`, container builds) is NOT a production data environment:
-  // those have no Firebase credentials by design, so they run the clearly-
+  // those have no Supabase credentials by design, so they run the clearly-
   // labelled in-memory driver instead of failing closed.
   return process.env.NODE_ENV === "production" && process.env.VERCEL_ENV === "production";
 }
@@ -23,40 +23,40 @@ function isProduction(): boolean {
 /**
  * Returns the active data store.
  *
- * PRODUCTION (fail closed): Firestore only. Without Firebase Admin
- * credentials — or when Firestore is unreachable — the app refuses to serve
+ * PRODUCTION (fail closed): PostgreSQL (Supabase) only. Without the Supabase
+ * secret key — or when the database is unreachable — the app refuses to serve
  * data rather than silently downgrading: placeholder data must never
  * masquerade as production content.
  *
  * DEVELOPMENT: in-memory driver with clearly-labelled placeholder data so
- * the site, API and admin panel keep working before Firebase is configured.
+ * the site, API and admin panel keep working before Supabase is configured.
  */
 export async function getStore(): Promise<DataStore> {
-  if (!isFirebaseAdminConfigured()) {
+  if (!isSupabaseAdminConfigured()) {
     if (isProduction()) {
       throw new Error(
-        "Firebase Admin credentials are not set. Firestore is the production database — " +
-          "set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY."
+        "Supabase credentials are not set. PostgreSQL is the production database — " +
+          "set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY)."
       );
     }
     warnOnce(
-      "Firebase Admin credentials are not set — running with the in-memory development store (placeholder data)."
+      "Supabase credentials are not set — running with the in-memory development store (placeholder data)."
     );
     return memoryStore;
   }
 
   if (!globalRef.__mfcActiveStore) {
     try {
-      await firestoreStore.stats(); // forces connection + first-run seed
-      globalRef.__mfcActiveStore = firestoreStore;
+      await postgresStore.stats(); // forces connection + first-run seed
+      globalRef.__mfcActiveStore = postgresStore;
     } catch (error) {
       if (isProduction()) {
-        // Fail closed: a broken Firestore connection must never downgrade
+        // Fail closed: a broken database connection must never downgrade
         // production to the in-memory store.
         throw error;
       }
       warnOnce(
-        `Firestore connection failed (${(error as Error).message}) — falling back to the in-memory store.`
+        `PostgreSQL connection failed (${(error as Error).message}) — falling back to the in-memory store.`
       );
       globalRef.__mfcActiveStore = memoryStore;
       return memoryStore;

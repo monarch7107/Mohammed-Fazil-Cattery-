@@ -9,11 +9,11 @@ import { Label } from "@/components/ui/label";
 import { apiSend, ApiError } from "@/lib/admin/api";
 
 /**
- * Sign-in flow:
- *  - Firebase configured → authenticate with the Firebase JS SDK (email +
- *    password) and post the resulting ID token to /api/auth/login, which
- *    verifies it server-side and issues the signed session cookie.
- *  - Otherwise → legacy POST with email + password (env-configured accounts).
+ * Sign-in flow (Supabase Auth):
+ *  1. Sign in with the Supabase JS SDK (email + password).
+ *  2. POST the resulting access token to /api/auth/login.
+ *  3. The server verifies the token, checks the `admins` table, and issues
+ *     the signed httpOnly session cookie.
  */
 export function LoginForm({ returnTo }: { returnTo?: string }) {
   const router = useRouter();
@@ -22,17 +22,17 @@ export function LoginForm({ returnTo }: { returnTo?: string }) {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [firebaseReady, setFirebaseReady] = useState<boolean | null>(null);
+  const [supabaseReady, setSupabaseReady] = useState<boolean | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     fetch("/api/auth/mode")
       .then((response) => (response.ok ? response.json() : null))
-      .then((payload: { firebase?: boolean } | null) => {
-        if (!cancelled) setFirebaseReady(Boolean(payload?.firebase));
+      .then((payload: { supabase?: boolean } | null) => {
+        if (!cancelled) setSupabaseReady(Boolean(payload?.supabase));
       })
       .catch(() => {
-        if (!cancelled) setFirebaseReady(false);
+        if (!cancelled) setSupabaseReady(false);
       });
     return () => {
       cancelled = true;
@@ -44,21 +44,37 @@ export function LoginForm({ returnTo }: { returnTo?: string }) {
     setBusy(true);
     setError(null);
     try {
-      let idToken: string | undefined;
+      let accessToken: string | undefined;
 
-      if (firebaseReady) {
-        const { getFirebaseClientApp } = await import("@/lib/firebase/client");
-        const authModule = await import("firebase/auth");
-        const app = await getFirebaseClientApp();
-        const auth = authModule.getAuth(app);
-        const credential = await authModule.signInWithEmailAndPassword(auth, email, password);
-        idToken = await credential.user.getIdToken();
+      if (supabaseReady) {
+        const { getSupabaseBrowserClient } = await import("@/lib/supabase/client");
+        const supabase = getSupabaseBrowserClient();
+        if (!supabase) {
+          setError("Authentication is not configured. Contact the site owner.");
+          setBusy(false);
+          return;
+        }
+        const { data, error: authError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+        if (authError || !data.session) {
+          const code = authError?.name ?? authError?.code ?? "";
+          setError(
+            code === "AuthApiError" || code === "invalid_credentials"
+              ? "Email or password is incorrect."
+              : authError?.message ?? "Sign-in failed. Please try again."
+          );
+          setBusy(false);
+          return;
+        }
+        accessToken = data.session.access_token;
         // The session is carried by the server cookie; the client-side
-        // Firebase session is no longer needed.
-        await authModule.signOut(auth).catch(() => undefined);
+        // Supabase session is no longer needed.
+        await supabase.auth.signOut().catch(() => undefined);
       }
 
-      await apiSend("/api/auth/login", "POST", { email, password, idToken });
+      await apiSend("/api/auth/login", "POST", { email, password, accessToken });
       const destination =
         returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//")
           ? returnTo
@@ -66,25 +82,8 @@ export function LoginForm({ returnTo }: { returnTo?: string }) {
       router.push(destination);
       router.refresh();
     } catch (err) {
-      const firebaseMessage =
-        typeof err === "object" && err !== null && "code" in err && typeof (err as { code?: unknown }).code === "string"
-          ? (() => {
-              const code = (err as { code: string }).code;
-              if (code === "auth/invalid-credential" || code === "auth/wrong-password" || code === "auth/user-not-found") {
-                return "Email or password is incorrect.";
-              }
-              if (code === "auth/too-many-requests") {
-                return "Too many attempts. Please wait a few minutes and try again.";
-              }
-              if (code === "auth/network-request-failed") {
-                return "Network error. Check your connection and try again.";
-              }
-              return null;
-            })()
-          : null;
       setError(
-        firebaseMessage ??
-          (err instanceof ApiError ? err.message : "Sign-in failed. Please try again.")
+        err instanceof ApiError ? err.message : "Sign-in failed. Please try again."
       );
       setBusy(false);
     }
