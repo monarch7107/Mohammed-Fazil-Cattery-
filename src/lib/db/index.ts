@@ -1,5 +1,5 @@
 import type { DataStore } from "@/lib/db/types";
-import { isSupabaseAdminConfigured } from "@/lib/supabase/admin";
+import { isSupabaseClientConfigured } from "@/lib/supabase/client";
 import { postgresStore } from "@/lib/db/postgres";
 import { memoryStore } from "@/lib/db/memory";
 
@@ -23,31 +23,31 @@ function isProduction(): boolean {
 /**
  * Returns the active data store.
  *
- * PRODUCTION (fail closed): PostgreSQL (Supabase) only. Without the Supabase
- * secret key — or when the database is unreachable — the app refuses to serve
- * data rather than silently downgrading: placeholder data must never
- * masquerade as production content.
+ * PRODUCTION (fail closed): PostgreSQL (Supabase) only. Without the two
+ * publishable configuration values — or when the database is unreachable —
+ * the app refuses to serve data rather than silently downgrading: placeholder
+ * data must never masquerade as production content.
  *
  * DEVELOPMENT: in-memory driver with clearly-labelled placeholder data so
  * the site, API and admin panel keep working before Supabase is configured.
  */
 export async function getStore(): Promise<DataStore> {
-  if (!isSupabaseAdminConfigured()) {
+  if (!isSupabaseClientConfigured()) {
     if (isProduction()) {
       throw new Error(
-        "Supabase credentials are not set. PostgreSQL is the production database — " +
-          "set NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY)."
+        "Supabase configuration is missing. PostgreSQL is the production database — " +
+          "set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY."
       );
     }
     warnOnce(
-      "Supabase credentials are not set — running with the in-memory development store (placeholder data)."
+      "Supabase is not configured — running with the in-memory development store (placeholder data)."
     );
     return memoryStore;
   }
 
   if (!globalRef.__mfcActiveStore) {
     try {
-      await postgresStore.stats(); // forces connection + first-run seed
+      await postgresStore.stats(); // forces connection check
       globalRef.__mfcActiveStore = postgresStore;
     } catch (error) {
       if (isProduction()) {

@@ -51,7 +51,8 @@ Next.js 15 Route Handlers  (/api/*)
   │
   ▼
 DataStore interface  (src/lib/db/types.ts)
-  ├─ PostgreSQL (Supabase) driver  ← Supabase secret key set (production)
+  ├─ PostgreSQL (Supabase) driver  ← publishable key only; every query runs
+  │                                  under Row Level Security with the caller's identity
   └─ in-memory driver              ← not configured (development, clearly-labelled placeholders)
 ```
 
@@ -68,8 +69,8 @@ strings for images, so the storage driver can change without touching any form.
 | Styling | Tailwind CSS 3 with a custom brand token set |
 | UI | Radix primitives (Dialog, Select, Label) + CVA variants, heavily customised |
 | 3D | Three.js + React Three Fiber 9 (+ drei), procedural GLTF-free model |
-| Database | PostgreSQL on Supabase (privileged server client), zod-validated writes, Row Level Security |
-| Auth | Supabase Auth (access-token exchange) with signed httpOnly session cookie |
+| Database | PostgreSQL on Supabase (publishable-key client, RLS is the gate), zod-validated writes |
+| Auth | Supabase Auth (cookie-carried session) with signed httpOnly session cookie |
 | Images | Cloudinary (kittens/ products/ gallery/ folders, signed server-side uploads); local disk (dev only) |
 | Deployment | Vercel (or Freebuff-managed hosting) |
 
@@ -98,14 +99,15 @@ src/
     hero/ sections/ kittens/ products/ gallery/ contact/ layout/ brand/ images/ admin/ ui/ seo/
   lib/
     db/         store contract, PostgreSQL driver, memory driver, placeholder data
-    supabase/   browser client · RLS-scoped server client · privileged client · authorization
+    supabase/   browser client · RLS-scoped server client · admin identity helpers
     auth/       session · guard · page-guard
     storage/    Cloudinary driver + local (dev) driver
     admin/      fetch wrapper with upload progress
     site.ts  whatsapp.ts  data.ts  validation.ts  images.ts  utils.ts
   models/       types.ts (Kitten/Product/Gallery/AdminUser) · schemas.ts (zod)
-scripts/        supabase-setup.mjs (two admin accounts)
-supabase/schema.sql  tables + Row Level Security policies
+scripts/        (dev utilities only)
+supabase/schema.sql  tables + Row Level Security policies (publishable-key-only)
+supabase/admin-setup.sql  one-time admin provisioning (SQL editor)
 env.example     environment template (copy to .env.local)
 ```
 
@@ -127,18 +129,21 @@ using an in-memory store seeded with clearly-labelled placeholder records.
 The backend uses **Supabase Auth** (admin sign-in), **PostgreSQL** (content, protected by Row
 Level Security) and **Cloudinary** (images). The free tier covers the Supabase side.
 
+> **Publishable-key-only:** the app requires NO Supabase secret key, service_role key or database
+> password. Only the two `NEXT_PUBLIC_SUPABASE_*` values are used — they are safe for the browser
+> by design. Authorization is enforced by the RLS policies in `supabase/schema.sql`.
+
 > Images are stored in **Cloudinary**, not Supabase Storage. PostgreSQL keeps only metadata
 > (URLs + Cloudinary public_ids).
 
 1. Create a project at [supabase.com](https://supabase.com) (e.g. `mohammed-fazil-cattery`).
 2. Open **SQL Editor → New query**, paste the full contents of `supabase/schema.sql`, and run it.
-   It creates the four tables (`admins`, `kittens`, `products`, `gallery`), the RLS policies and
-   an optional placeholder seed.
+   It creates the four tables (`admins`, `kittens`, `products`, `gallery`), the
+   `is_cattery_admin()` security-definer helper, the RLS policies and an optional placeholder seed.
 3. Copy from **Project Settings → API**:
    - Project URL → `NEXT_PUBLIC_SUPABASE_URL`
    - publishable (anon) key → `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
-   - secret key (`sb_secret_…`, or the legacy `service_role` JWT) → `SUPABASE_SECRET_KEY`
-     — **server-only, never `NEXT_PUBLIC_`**.
+   - That's all. The secret key / service_role key stays unused — never add it.
 4. Provision the **two admin accounts** (see [Admin setup](#admin-setup)).
 
 Fill these in `.env.local` (see `env.example`):
@@ -146,7 +151,7 @@ Fill these in `.env.local` (see `env.example`):
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co
 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...   (or the legacy anon JWT)
-SUPABASE_SECRET_KEY=sb_secret_...                        (or SUPABASE_SERVICE_ROLE_KEY=...)
+AUTH_SECRET=...                                          (openssl rand -hex 32)
 ```
 
 **Tables:** `admins`, `kittens`, `products`, `gallery`.
@@ -155,11 +160,13 @@ SUPABASE_SECRET_KEY=sb_secret_...                        (or SUPABASE_SERVICE_RO
 
 - Public (anonymous **and** ordinary authenticated users): `SELECT` on `kittens`, `products`,
   `gallery` only.
-- Writes on content tables require an authenticated Supabase user with an **active `admins` row**
-  (`admins.id = auth.users.id`, `role = 'admin'`, `active = true`) — checked server-side, never a
-  client-supplied flag.
-- The `admins` registry is not readable or writable by clients; only the privileged server
-  connection and the console manage it.
+- Writes on content tables require an authenticated Supabase user whose `auth.uid()` owns an
+  **active `admins` row** (`role = 'admin'`, `active = true`) — evaluated by the security-definer
+  helper `public.is_cattery_admin()`, never a client-supplied flag or user metadata.
+- Every write policy pairs `USING` with `WITH CHECK`.
+- The `admins` registry has **no client policies at all**: no anon or authenticated user can read
+  or modify it through the API (default-deny under RLS). Promotion/demotion happens only in the
+  SQL editor, which runs as the database owner.
 
 ### Data models
 
@@ -181,18 +188,16 @@ fields are **never rendered** — the site shows only what actually exists.
 ## Admin setup
 
 The site supports **two administrator accounts** (Administrator + Owner) with identical
-permissions. Provision both in one step (run locally, never in CI):
+permissions. Because the application holds no privileged key, accounts are provisioned from the
+Supabase dashboard + SQL editor (a trusted, one-time operation):
 
-```bash
-NEXT_PUBLIC_SUPABASE_URL="https://<ref>.supabase.co" SUPABASE_SECRET_KEY="sb_secret_..." \
-ADMIN_EMAIL="first-admin@example.com"  ADMIN_PASSWORD="a-strong-password" \
-OWNER_EMAIL="second-admin@example.com" OWNER_PASSWORD="another-strong-password" \
-npm run supabase-setup
-```
+1. **Authentication → Users → Add user → Create new user** for each admin
+   (email + strong password, tick **Auto Confirm User**).
+2. Open `supabase/admin-setup.sql` in the SQL editor, replace the two placeholder emails with the
+   same addresses, and run it. This writes/repairs the matching `admins` rows (idempotent).
 
-The script creates/updates both Supabase Auth users (idempotent — it reuses existing users by
-email, never duplicating) and writes the matching `admins` rows. Passwords are used at run time
-only — they are never stored in the repo or in the database.
+No passwords are ever stored in the repository, and admin flags cannot be self-service granted —
+the `admins` table is unreachable by any client role.
 
 1. Set `AUTH_SECRET` (required in production): `openssl rand -hex 32`.
 2. Visit **`/admin`** → redirected to `/admin/login` → dashboard at `/admin/dashboard`.
@@ -233,7 +238,6 @@ See `env.example` for the complete, commented list. Highlights:
 | `NEXT_PUBLIC_BUSINESS_ADDRESS` | Directions link renders **only** when set. |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL (public identifier). |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Publishable/anon key (safe for the browser; RLS is the gate). |
-| `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`) | Server-only privileged key for the API layer. Unset → in-memory development store. |
 | `AUTH_SECRET` | Session cookie signing (mandatory in production). |
 | `IMAGE_STORAGE_DRIVER` | `cloudinary` \| `local` (auto-detects Cloudinary when unset). |
 
@@ -282,7 +286,7 @@ CatCompanion (fixed dock, lazy, aria-hidden, decorative)
 | POST | `/api/gallery` | admin | |
 | PATCH/DELETE | `/api/gallery/:id` | admin | delete also removes the stored file |
 | POST | `/api/gallery/reorder` | admin | `{ orderedIds: string[] }` |
-| POST | `/api/auth/login` | – | Supabase access-token exchange; rate-limited 5 / 10 min / IP |
+| POST | `/api/auth/login` | – | cookie-session verification + identity check; rate-limited 5 / 10 min / IP |
 | GET | `/api/auth/mode` | – | reports whether the Supabase flow is active |
 | POST | `/api/auth/logout` | session | clears cookie |
 | GET | `/api/auth/me` | – | session + environment info |
@@ -293,24 +297,29 @@ CatCompanion (fixed dock, lazy, aria-hidden, decorative)
 
 1. Push the repository and import it into Vercel (Next.js is auto-detected).
 2. Add environment variables: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`,
-   `SUPABASE_SECRET_KEY` (server-only), `AUTH_SECRET`, `NEXT_PUBLIC_SITE_URL` (your real domain),
-   `NEXT_PUBLIC_WHATSAPP_NUMBER`, `NEXT_PUBLIC_PHONE`, `NEXT_PUBLIC_INSTAGRAM_URL`, plus the
-   Cloudinary set. Storage defaults to Cloudinary automatically.
-3. Run `supabase/schema.sql` in the Supabase SQL editor and `npm run supabase-setup` once
-   (locally, with the same credentials) to create the two admins.
+   `AUTH_SECRET`, `NEXT_PUBLIC_SITE_URL` (your real domain), `NEXT_PUBLIC_WHATSAPP_NUMBER`,
+   `NEXT_PUBLIC_PHONE`, `NEXT_PUBLIC_INSTAGRAM_URL`, plus the Cloudinary set. Storage defaults to
+   Cloudinary automatically. **No Supabase secret key is needed.**
+3. Run `supabase/schema.sql` in the Supabase SQL editor and provision the two admins via
+   `supabase/admin-setup.sql` (see Admin setup).
 4. Deploy. Build command default: `next build`; output handled by the Next.js runtime.
 5. Sign in at `/admin` and replace the placeholder records with real content
-   (or set `SEED_ON_EMPTY=false` before the first deploy if you prefer empty tables).
+   (or delete the seed block at the bottom of `supabase/schema.sql` before running it if you
+   prefer empty tables).
 
 ## Security
 
-- Supabase Auth signs admins in; the server verifies the access token with the privileged key
-  and re-checks authorisation against the `admins` table before issuing the session. The Supabase
-  secret key is **server-only** (never `NEXT_PUBLIC_*`).
-- PostgreSQL Row Level Security enforces authorisation at the database layer: public read-only
-  content, admin-only writes keyed on `auth.uid()` + an active `admins` row, and an `admins`
-  registry that clients cannot read or modify. No `USING (true)`/`WITH CHECK (true)` admin
-  policies exist.
+- **Publishable-key-only:** no Supabase secret key, service_role key or database password exists
+  anywhere in this codebase or its deployment. The browser is treated as untrusted.
+- Supabase Auth signs admins in; the session lives in cookies managed by `@supabase/ssr` and is
+  refreshed by `src/middleware.ts`. The server verifies the cookie-carried session with the same
+  publishable key and re-checks identity-based authorization before issuing the app session.
+- PostgreSQL Row Level Security is the authorization boundary (not key secrecy): public read-only
+  content, admin-only writes evaluated by the `is_cattery_admin()` security-definer helper keyed
+  on `auth.uid()` + an active `admins` row, and an `admins` registry no client role can read or
+  modify. No `USING (true)`/`WITH CHECK (true)` admin policies exist.
+- `raw_user_meta_data` is never consulted for authorization, so client-side metadata edits grant
+  nothing.
 - HMAC-SHA256 signed, `httpOnly`, `SameSite=Lax`, `Secure` session cookie (7 days).
 - `AUTH_SECRET` is **required in production** — the app fails closed without it.
 - zod validation on every write payload; string length caps; sanitisation by construction
@@ -366,7 +375,7 @@ CatCompanion (fixed dock, lazy, aria-hidden, decorative)
 | Keyboard navigation & focus | ✅ skip link, focus-visible, dialog focus trap |
 | Reduced motion | ✅ intro skipped, 3D static, animations disabled |
 | Error states | ✅ loading, empty, 404, global error, upload failure, WebGL failure |
-| PostgreSQL connectivity | ✅ privileged server client with cached app + graceful in-memory fallback; RLS policies shipped in-repo |
+| PostgreSQL connectivity | ✅ publishable-key RLS client + graceful in-memory fallback; RLS policies shipped in-repo |
 
 ## Known limitations
 
@@ -398,8 +407,7 @@ CatCompanion (fixed dock, lazy, aria-hidden, decorative)
 
 - [ ] Supabase project created; `supabase/schema.sql` executed (tables + RLS)
 - [ ] `NEXT_PUBLIC_SUPABASE_URL` + `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` set
-- [ ] `SUPABASE_SECRET_KEY` (or `SUPABASE_SERVICE_ROLE_KEY`) set (server-only)
-- [ ] Both admin accounts provisioned (`npm run supabase-setup`); passwords are strong
+- [ ] Both admin accounts provisioned (`supabase/admin-setup.sql`); passwords are strong
 - [ ] RLS verified: anonymous read OK, anonymous write denied, non-admin user write denied
 - [ ] `AUTH_SECRET` set (32+ chars) — app refuses sessions without it in production
 - [ ] `NEXT_PUBLIC_SITE_URL` set to the real domain (sitemap/OG/canonical)
@@ -407,7 +415,7 @@ CatCompanion (fixed dock, lazy, aria-hidden, decorative)
 - [ ] `NEXT_PUBLIC_BUSINESS_ADDRESS` set only if verified — otherwise leave empty
 - [ ] Cloudinary credentials set (`CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` /
       `CLOUDINARY_API_SECRET`, or `CLOUDINARY_URL`) — server-only
-- [ ] Placeholder records replaced or deleted; `SEED_ON_EMPTY=false`
+- [ ] Placeholder records replaced or deleted (seed block in `supabase/schema.sql`)
 - [ ] `tsc --noEmit` passes; `next build` succeeds
 - [ ] Checked at 320 / 375 / 390 / 430 / 768 / 1024 / 1440 px
 - [ ] Keyboard-only pass + reduced-motion pass

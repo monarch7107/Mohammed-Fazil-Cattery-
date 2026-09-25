@@ -62,6 +62,11 @@ export interface GalleryItem {
   createdAt: string;
 }
 
+/**
+ * Legacy compatibility shape kept only for the DataStore contract's
+ * findAdminByEmail/ensureAdmin placeholders — no password hashes exist in
+ * this architecture (authentication is Supabase Auth).
+ */
 export interface AdminUser {
   id: string;
   email: string;

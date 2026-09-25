@@ -1,16 +1,54 @@
 -- ============================================================================
 -- Mohammed Fazil Cattery — PostgreSQL schema + Row Level Security
+-- PUBLISHABLE-KEY-ONLY ARCHITECTURE (no secret/service_role key in the app)
 -- ============================================================================
 -- Run this once in the Supabase SQL editor (Dashboard → SQL → New query).
 --
--- Architecture:
---   • Public visitors read kittens/products/gallery anonymously (RLS allows).
---   • Admins are Supabase Auth users with an active row in public.admins
---     (admins.id = auth.users.id). RLS grants them full CRUD.
---   • Normal authenticated users get NO admin rights — authorization is
---     server-side and identity-based, never a client-supplied flag.
---   • Images live in Cloudinary; only URLs + public_ids are stored here.
+-- Security model (the browser is untrusted; only the two NEXT_PUBLIC_
+-- Supabase values are used by the application):
+--
+--   • Public visitors  → `anon` role, read-only SELECT on content tables.
+--   • Normal auth users → `authenticated` role, still read-only: admin
+--     rights never come from being signed in.
+--   • Admins           → a Supabase Auth user whose auth.uid() owns an
+--     active row in public.admins (role='admin', active=true). Identified
+--     ONLY by the security-definer helper public.is_cattery_admin(), which
+--     avoids RLS recursion and cannot be spoofed by client metadata.
+--   • raw_user_meta_data is NEVER used for authorization.
+--
+-- Every write policy pairs USING with WITH CHECK. The admins registry is
+-- invisible to every client role; rows are created from the dashboard's
+-- SQL editor while signed in as postgres (see supabase/admin-setup.sql).
+--
+-- Images live in Cloudinary; only URLs + public_ids are stored here.
 -- ============================================================================
+
+create extension if not exists pgcrypto;
+
+-- ---------------------------------------------------------------------------
+-- public.is_cattery_admin() — the single authorization primitive
+-- ---------------------------------------------------------------------------
+-- SECURITY DEFINER + locked search_path: evaluates the admins table with the
+-- function owner's rights, so policies on other tables can call it without
+-- recursing into admins' own RLS. immutable-in-request identity (auth.uid()).
+create or replace function public.is_cattery_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (
+    select 1
+    from public.admins a
+    where a.id = auth.uid()
+      and a.active is true
+      and a.role = 'admin'
+  );
+$$;
+
+revoke all on function public.is_cattery_admin() from public;
+grant execute on function public.is_cattery_admin() to anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- admins — mirrors Supabase Auth users, managed by trusted setup only
@@ -27,18 +65,11 @@ create table if not exists public.admins (
 
 alter table public.admins enable row level security;
 
--- Only admins may read the registry; clients can never create or modify it.
-drop policy if exists "admins read own registry" on public.admins;
-create policy "admins read own registry"
-  on public.admins for select
-  using (
-    auth.role() = 'authenticated'
-    and auth.uid() = id
-    and exists (
-      select 1 from public.admins a
-      where a.id = auth.uid() and a.active and a.role = 'admin'
-    )
-  );
+-- Clients get NO policy on admins: anon/authenticated cannot SELECT, INSERT,
+-- UPDATE or DELETE any of it (default-deny under RLS). Not even admins can
+-- read or alter the registry from the API — promotion/demotion happens only
+-- in the SQL editor or supabase/admin-setup.sql, which run as postgres.
+-- (The definer function above is the sole reader, as the table owner.)
 
 -- ---------------------------------------------------------------------------
 -- kittens
@@ -66,26 +97,28 @@ create index if not exists kittens_created_idx  on public.kittens (created_at de
 
 alter table public.kittens enable row level security;
 
+-- Public read (everyone, including anon).
 drop policy if exists "kittens public read" on public.kittens;
 create policy "kittens public read"
   on public.kittens for select
   using (true);
 
-drop policy if exists "kittens admin write" on public.kittens;
-create policy "kittens admin write"
-  on public.kittens for all
-  using (
-    exists (
-      select 1 from public.admins a
-      where a.id = auth.uid() and a.active and a.role = 'admin'
-    )
-  )
-  with check (
-    exists (
-      select 1 from public.admins a
-      where a.id = auth.uid() and a.active and a.role = 'admin'
-    )
-  );
+-- Admin writes: separate per-action policies, all USING + WITH CHECK.
+drop policy if exists "kittens admin insert" on public.kittens;
+create policy "kittens admin insert"
+  on public.kittens for insert to authenticated
+  with check (public.is_cattery_admin());
+
+drop policy if exists "kittens admin update" on public.kittens;
+create policy "kittens admin update"
+  on public.kittens for update to authenticated
+  using (public.is_cattery_admin())
+  with check (public.is_cattery_admin());
+
+drop policy if exists "kittens admin delete" on public.kittens;
+create policy "kittens admin delete"
+  on public.kittens for delete to authenticated
+  using (public.is_cattery_admin());
 
 -- ---------------------------------------------------------------------------
 -- products
@@ -119,21 +152,21 @@ create policy "products public read"
   on public.products for select
   using (true);
 
-drop policy if exists "products admin write" on public.products;
-create policy "products admin write"
-  on public.products for all
-  using (
-    exists (
-      select 1 from public.admins a
-      where a.id = auth.uid() and a.active and a.role = 'admin'
-    )
-  )
-  with check (
-    exists (
-      select 1 from public.admins a
-      where a.id = auth.uid() and a.active and a.role = 'admin'
-    )
-  );
+drop policy if exists "products admin insert" on public.products;
+create policy "products admin insert"
+  on public.products for insert to authenticated
+  with check (public.is_cattery_admin());
+
+drop policy if exists "products admin update" on public.products;
+create policy "products admin update"
+  on public.products for update to authenticated
+  using (public.is_cattery_admin())
+  with check (public.is_cattery_admin());
+
+drop policy if exists "products admin delete" on public.products;
+create policy "products admin delete"
+  on public.products for delete to authenticated
+  using (public.is_cattery_admin());
 
 -- ---------------------------------------------------------------------------
 -- gallery
@@ -159,21 +192,21 @@ create policy "gallery public read"
   on public.gallery for select
   using (true);
 
-drop policy if exists "gallery admin write" on public.gallery;
-create policy "gallery admin write"
-  on public.gallery for all
-  using (
-    exists (
-      select 1 from public.admins a
-      where a.id = auth.uid() and a.active and a.role = 'admin'
-    )
-  )
-  with check (
-    exists (
-      select 1 from public.admins a
-      where a.id = auth.uid() and a.active and a.role = 'admin'
-    )
-  );
+drop policy if exists "gallery admin insert" on public.gallery;
+create policy "gallery admin insert"
+  on public.gallery for insert to authenticated
+  with check (public.is_cattery_admin());
+
+drop policy if exists "gallery admin update" on public.gallery;
+create policy "gallery admin update"
+  on public.gallery for update to authenticated
+  using (public.is_cattery_admin())
+  with check (public.is_cattery_admin());
+
+drop policy if exists "gallery admin delete" on public.gallery;
+create policy "gallery admin delete"
+  on public.gallery for delete to authenticated
+  using (public.is_cattery_admin());
 
 -- ---------------------------------------------------------------------------
 -- updated_at maintenance trigger
@@ -181,6 +214,7 @@ create policy "gallery admin write"
 create or replace function public.touch_updated_at()
 returns trigger
 language plpgsql
+set search_path = ''
 as $$
 begin
   new.updated_at = now();
@@ -204,8 +238,8 @@ create trigger admins_touch_updated_at
   for each row execute function public.touch_updated_at();
 
 -- ---------------------------------------------------------------------------
--- Optional placeholder seed (safe to run; skips when data already exists).
--- Remove SEED_ON_EMPTY=false usage in production if you do not want this.
+-- Optional placeholder seed (safe to re-run; skips when data already exists).
+-- Set SEED_ON_EMPTY=false in the app env to keep the app from seeding.
 -- ---------------------------------------------------------------------------
 do $$
 begin

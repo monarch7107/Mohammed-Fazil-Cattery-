@@ -103,11 +103,10 @@ export const galleryReorderSchema = z.object({
 export const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email("Enter a valid email"),
   // Minimum is intentionally 6: real-world cattery passwords are often short.
-  // Brute force is mitigated by the 5-attempts-per-10-minutes login rate limit.
+  // Brute force is mitigated by the 5-attempts-per-10-minutes login rate limit
+  // and by Supabase Auth's own protections.
   password: z.string().min(6, "Password must be at least 6 characters").max(200),
-  // Supabase Auth access token (production path). When present the server
-  // verifies it against Supabase Auth instead of checking a password hash.
-  accessToken: z.string().trim().min(10).max(4096).optional(),
+  // No access-token field: identity always comes from the caller's cookies.
 });
 
 export type KittenInputPayload = z.infer<typeof kittenInputSchema>;

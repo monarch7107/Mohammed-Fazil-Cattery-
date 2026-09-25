@@ -7,8 +7,7 @@
     "dev": "next dev -H 0.0.0.0",
     "build": "next build",
     "start": "next start -H 0.0.0.0",
-    "typecheck": "tsc --noEmit",
-    "supabase-setup": "node scripts/supabase-setup.mjs"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.6",

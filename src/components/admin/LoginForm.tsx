@@ -9,11 +9,13 @@ import { Label } from "@/components/ui/label";
 import { apiSend, ApiError } from "@/lib/admin/api";
 
 /**
- * Sign-in flow (Supabase Auth):
- *  1. Sign in with the Supabase JS SDK (email + password).
- *  2. POST the resulting access token to /api/auth/login.
- *  3. The server verifies the token, checks the `admins` table, and issues
- *     the signed httpOnly session cookie.
+ * Sign-in flow (Supabase Auth, publishable key only):
+ *  1. Sign in with the Supabase JS SDK — @supabase/ssr stores the session
+ *     in browser cookies automatically.
+ *  2. POST /api/auth/login with no credentials in the body: the server reads
+ *     the same cookies, verifies the session with the publishable key,
+ *     checks the identity-based `admins` authorization, and issues the
+ *     signed httpOnly app session cookie.
  */
 export function LoginForm({ returnTo }: { returnTo?: string }) {
   const router = useRouter();
@@ -44,37 +46,36 @@ export function LoginForm({ returnTo }: { returnTo?: string }) {
     setBusy(true);
     setError(null);
     try {
-      let accessToken: string | undefined;
-
-      if (supabaseReady) {
-        const { getSupabaseBrowserClient } = await import("@/lib/supabase/client");
-        const supabase = getSupabaseBrowserClient();
-        if (!supabase) {
-          setError("Authentication is not configured. Contact the site owner.");
-          setBusy(false);
-          return;
-        }
-        const { data, error: authError } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (authError || !data.session) {
-          const code = authError?.name ?? authError?.code ?? "";
-          setError(
-            code === "AuthApiError" || code === "invalid_credentials"
-              ? "Email or password is incorrect."
-              : authError?.message ?? "Sign-in failed. Please try again."
-          );
-          setBusy(false);
-          return;
-        }
-        accessToken = data.session.access_token;
-        // The session is carried by the server cookie; the client-side
-        // Supabase session is no longer needed.
-        await supabase.auth.signOut().catch(() => undefined);
+      const { getSupabaseBrowserClient } = await import("@/lib/supabase/client");
+      const supabase = getSupabaseBrowserClient();
+      if (!supabase) {
+        setError("Authentication is not configured. Contact the site owner.");
+        setBusy(false);
+        return;
       }
 
-      await apiSend("/api/auth/login", "POST", { email, password, accessToken });
+      // 1. Sign in with Supabase Auth. @supabase/ssr persists the session in
+      //    browser cookies automatically — the login request forwards them.
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (authError || !data.session) {
+        const code = authError?.name ?? authError?.code ?? "";
+        setError(
+          code === "AuthApiError" || code === "invalid_credentials"
+            ? "Email or password is incorrect."
+            : authError?.message ?? "Sign-in failed. Please try again."
+        );
+        setBusy(false);
+        return;
+      }
+
+      // 2. Exchange the cookie-carried session for the app's signed session
+      //    cookie. The body carries no identity — the server reads it from
+      //    the cookies and re-checks the identity-based admin authorization.
+      await apiSend("/api/auth/login", "POST", { email, password });
+
       const destination =
         returnTo && returnTo.startsWith("/") && !returnTo.startsWith("//")
           ? returnTo
