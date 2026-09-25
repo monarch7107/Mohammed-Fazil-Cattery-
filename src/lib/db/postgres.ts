@@ -12,26 +12,27 @@ import type {
   ListKittenFilter,
   ListProductFilter,
 } from "@/lib/db/types";
-import {
-  placeholderGallery,
-  placeholderKittens,
-  placeholderProducts,
-} from "@/lib/db/placeholder-data";
-import { supabaseAdmin, type SupabaseAdminClient } from "@/lib/supabase/admin";
+import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 /**
  * PostgreSQL (Supabase) implementation of the DataStore contract.
  *
- * The public site, the API routes and the admin panel only ever talk to the
- * DataStore interface — swapping the underlying store touches no component.
+ * PUBLISHABLE-KEY-ONLY ARCHITECTURE: there is no privileged client and no
+ * secret key. Every operation executes through the cookie-bound server
+ * client, so PostgreSQL Row Level Security is the actual authorization
+ * layer:
  *
- * Every operation goes through the privileged server client so the Next.js
- * API layer (session cookie + admin authorization) remains the security gate;
- * the identical RLS policies in supabase/schema.sql protect direct public
- * table access.
+ *   - public reads        → allowed by `*_public_read` policies (anon role)
+ *   - admin writes        → allowed by identity-based admin policies
+ *                           (auth.uid() must own an active `admins` row,
+ *                           evaluated by the security-definer helper
+ *                           public.is_cattery_admin())
+ *   - everything else     → denied by RLS
+ *
+ * Authorization is therefore enforced at the database per-statement level —
+ * identical for requests arriving via the Next.js API layer and for any
+ * direct use of the publishable key.
  */
-
-const globalRef = globalThis as typeof globalThis & { __mfcPgSeeded?: boolean };
 
 type KittenRow = {
   id: string;
@@ -42,8 +43,8 @@ type KittenRow = {
   description: string;
   status: Kitten["status"];
   price: number | string | null;
-  images: string[];
-  image_ids: string[];
+  images: unknown;
+  image_ids: unknown;
   featured: boolean;
   placeholder: boolean;
   created_at: string;
@@ -140,86 +141,14 @@ function mapGallery(row: GalleryRow): GalleryItem {
   };
 }
 
-async function ready(): Promise<SupabaseAdminClient> {
-  const client = supabaseAdmin();
-  if (!client) {
+async function client() {
+  const c = await getSupabaseServerClient();
+  if (!c) {
     throw new Error(
-      "Supabase is not configured — set NEXT_PUBLIC_SUPABASE_URL plus a server-only SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY)."
+      "Supabase is not configured — set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY."
     );
   }
-  await seedIfEmpty(client);
-  return client;
-}
-
-/** First-run seeding (clearly-labelled placeholders), mirroring previous stores. */
-async function seedIfEmpty(client: SupabaseAdminClient): Promise<void> {
-  if (globalRef.__mfcPgSeeded) return;
-  if (process.env.SEED_ON_EMPTY === "false") {
-    globalRef.__mfcPgSeeded = true;
-    return;
-  }
-
-  try {
-    const count = async (table: "kittens" | "products" | "gallery") => {
-      const { count: value } = await client.from(table).select("id", { count: "exact", head: true });
-      return value ?? 0;
-    };
-
-    const [kittens, products, gallery] = await Promise.all([
-      count("kittens"),
-      count("products"),
-      count("gallery"),
-    ]);
-
-    if (kittens === 0 && products === 0 && gallery === 0) {
-      await client.from("kittens").insert(
-        placeholderKittens().map(({ id: _id, ...rest }) => ({
-          name: rest.name,
-          breed: rest.breed,
-          gender: rest.gender,
-          date_of_birth: rest.dateOfBirth,
-          description: rest.description,
-          status: rest.status,
-          price: rest.price,
-          images: rest.images,
-          image_ids: rest.imageIds,
-          featured: rest.featured,
-          placeholder: true,
-        }))
-      );
-      await client.from("products").insert(
-        placeholderProducts().map(({ id: _id, ...rest }) => ({
-          name: rest.name,
-          animal: rest.animal,
-          category: rest.category,
-          food_type: rest.foodType,
-          brand: rest.brand,
-          pack_size: rest.packSize,
-          price: rest.price,
-          description: rest.description,
-          image: rest.image,
-          image_id: rest.imageId,
-          available: rest.available,
-          placeholder: true,
-        }))
-      );
-      await client.from("gallery").insert(
-        placeholderGallery().map(({ id: _id, ...rest }) => ({
-          image: rest.image,
-          image_id: rest.imageId,
-          category: rest.category,
-          caption: rest.caption,
-          sort_order: rest.sortOrder,
-          placeholder: true,
-        }))
-      );
-    }
-  } catch (error) {
-    // Seeding is best-effort: never block reads on it.
-    console.warn("[cattery] Supabase seed skipped:", (error as Error).message);
-  }
-
-  globalRef.__mfcPgSeeded = true;
+  return c;
 }
 
 export const postgresStore: DataStore = {
@@ -228,8 +157,8 @@ export const postgresStore: DataStore = {
   /* ------------------------------- Kittens ---------------------------- */
 
   async listKittens(filter: ListKittenFilter = {}) {
-    const client = await ready();
-    let query = client.from("kittens").select("*").order("created_at", { ascending: false });
+    const c = await client();
+    let query = c.from("kittens").select("*").order("created_at", { ascending: false });
     if (filter.status) query = query.eq("status", filter.status);
     if (filter.featured) query = query.eq("featured", true);
     const { data, error } = await query;
@@ -238,15 +167,15 @@ export const postgresStore: DataStore = {
   },
 
   async getKitten(id) {
-    const client = await ready();
-    const { data, error } = await client.from("kittens").select("*").eq("id", id).maybeSingle();
+    const c = await client();
+    const { data, error } = await c.from("kittens").select("*").eq("id", id).maybeSingle();
     if (error) throw new Error(error.message);
     return data ? mapKitten(data as KittenRow) : null;
   },
 
   async createKitten(input) {
-    const client = await ready();
-    const { data, error } = await client
+    const c = await client();
+    const { data, error } = await c
       .from("kittens")
       .insert({
         name: input.name,
@@ -268,8 +197,8 @@ export const postgresStore: DataStore = {
   },
 
   async updateKitten(id, input) {
-    const client = await ready();
-    const { data, error } = await client
+    const c = await client();
+    const { data, error } = await c
       .from("kittens")
       .update({
         name: input.name,
@@ -291,8 +220,8 @@ export const postgresStore: DataStore = {
   },
 
   async deleteKitten(id) {
-    const client = await ready();
-    const { data, error } = await client
+    const c = await client();
+    const { data, error } = await c
       .from("kittens")
       .delete()
       .eq("id", id)
@@ -305,8 +234,8 @@ export const postgresStore: DataStore = {
   /* ------------------------------ Products ---------------------------- */
 
   async listProducts(filter: ListProductFilter = {}) {
-    const client = await ready();
-    let query = client.from("products").select("*").order("created_at", { ascending: false });
+    const c = await client();
+    let query = c.from("products").select("*").order("created_at", { ascending: false });
     if (filter.animal) query = query.eq("animal", filter.animal);
     if (filter.category) query = query.eq("category", filter.category);
     const { data, error } = await query;
@@ -315,15 +244,15 @@ export const postgresStore: DataStore = {
   },
 
   async getProduct(id) {
-    const client = await ready();
-    const { data, error } = await client.from("products").select("*").eq("id", id).maybeSingle();
+    const c = await client();
+    const { data, error } = await c.from("products").select("*").eq("id", id).maybeSingle();
     if (error) throw new Error(error.message);
     return data ? mapProduct(data as ProductRow) : null;
   },
 
   async createProduct(input) {
-    const client = await ready();
-    const { data, error } = await client
+    const c = await client();
+    const { data, error } = await c
       .from("products")
       .insert({
         name: input.name,
@@ -346,8 +275,8 @@ export const postgresStore: DataStore = {
   },
 
   async updateProduct(id, input) {
-    const client = await ready();
-    const { data, error } = await client
+    const c = await client();
+    const { data, error } = await c
       .from("products")
       .update({
         name: input.name,
@@ -370,8 +299,8 @@ export const postgresStore: DataStore = {
   },
 
   async deleteProduct(id) {
-    const client = await ready();
-    const { data, error } = await client
+    const c = await client();
+    const { data, error } = await c
       .from("products")
       .delete()
       .eq("id", id)
@@ -384,8 +313,8 @@ export const postgresStore: DataStore = {
   /* ------------------------------- Gallery ---------------------------- */
 
   async listGallery(filter: ListGalleryFilter = {}) {
-    const client = await ready();
-    let query = client.from("gallery").select("*").order("sort_order", { ascending: true });
+    const c = await client();
+    let query = c.from("gallery").select("*").order("sort_order", { ascending: true });
     if (filter.category) query = query.eq("category", filter.category);
     const { data, error } = await query;
     if (error) throw new Error(error.message);
@@ -397,15 +326,15 @@ export const postgresStore: DataStore = {
   },
 
   async getGalleryItem(id) {
-    const client = await ready();
-    const { data, error } = await client.from("gallery").select("*").eq("id", id).maybeSingle();
+    const c = await client();
+    const { data, error } = await c.from("gallery").select("*").eq("id", id).maybeSingle();
     if (error) throw new Error(error.message);
     return data ? mapGallery(data as GalleryRow) : null;
   },
 
   async createGallery(input) {
-    const client = await ready();
-    const { data, error } = await client
+    const c = await client();
+    const { data, error } = await c
       .from("gallery")
       .insert({
         image: input.image,
@@ -422,14 +351,14 @@ export const postgresStore: DataStore = {
   },
 
   async updateGallery(id, patch) {
-    const client = await ready();
+    const c = await client();
     const update: Record<string, unknown> = {};
     if (patch.image !== undefined) update.image = patch.image;
     if (patch.category !== undefined) update.category = patch.category;
     if (patch.caption !== undefined) update.caption = patch.caption;
     if (patch.sortOrder !== undefined) update.sort_order = patch.sortOrder;
 
-    const { data, error } = await client
+    const { data, error } = await c
       .from("gallery")
       .update(update)
       .eq("id", id)
@@ -440,8 +369,8 @@ export const postgresStore: DataStore = {
   },
 
   async deleteGallery(id) {
-    const client = await ready();
-    const { data, error } = await client
+    const c = await client();
+    const { data, error } = await c
       .from("gallery")
       .delete()
       .eq("id", id)
@@ -452,15 +381,15 @@ export const postgresStore: DataStore = {
   },
 
   async reorderGallery(orderedIds) {
-    const client = await ready();
+    const c = await client();
     // One update per id; Supabase JS has no multi-row batched update with
     // per-row values, and the gallery is small (≤500 items by schema).
     const results = await Promise.all(
       orderedIds.map((id, index) =>
-        client.from("gallery").update({ sort_order: index }).eq("id", id)
+        c.from("gallery").update({ sort_order: index }).eq("id", id)
       )
     );
-    const failed = results.find(({ error }) => error);
+    const failed = results.find((result) => result.error);
     if (failed?.error) throw new Error(failed.error.message);
     return orderedIds.length > 0;
   },
@@ -468,48 +397,24 @@ export const postgresStore: DataStore = {
   /* ------------------------------- Admins ----------------------------- */
 
   /**
-   * Admin authorization lives in Supabase Auth + the `admins` table
-   * (see src/lib/supabase/authorization.ts). The legacy email/password
-   * lookup stays inert by returning null, keeping the interface stable.
+   * Legacy interface placeholder. Admin authorization is identity-based via
+   * Supabase Auth + the `admins` table + RLS (see src/lib/supabase/server.ts
+   * and supabase/schema.sql). No password hashes exist anywhere.
    */
   async findAdminByEmail() {
     return null;
   },
 
-  /**
-   * Trusted server-side bootstrap: upsert an admins row for a Supabase Auth
-   * user. Called only by scripts/supabase-setup.mjs with the secret key.
-   */
-  async ensureAdmin(user: Omit<AdminUser, "id">) {
-    const client = await ready();
-    const { data } = await client
-      .from("admins")
-      .select("id, email, name, role, active, created_at")
-      .eq("email", user.email.toLowerCase())
-      .maybeSingle();
-
-    if (data) {
-      return {
-        id: data.id,
-        email: data.email,
-        name: data.name,
-        passwordHash: "",
-        role: "admin" as const,
-        createdAt: new Date(data.created_at).toISOString(),
-      };
-    }
-
-    // No auth user id known here — the setup script creates the Auth user and
-    // passes its id directly; this path only handles pre-existing rows.
+  async ensureAdmin() {
     return null;
   },
 
   /* -------------------------------- Stats ----------------------------- */
 
   async stats() {
-    const client = await ready();
+    const c = await client();
     const counter = async (table: string, column?: string, value?: unknown) => {
-      let query = client.from(table).select("id", { count: "exact", head: true });
+      let query = c.from(table).select("id", { count: "exact", head: true });
       if (column && value !== undefined) query = query.eq(column, value);
       const { count } = await query;
       return count ?? 0;

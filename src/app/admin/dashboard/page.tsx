@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Cat, Images, Package, Plus, type LucideIcon } from "lucide-react";
 import { requireAdminPage } from "@/lib/auth/page-guard";
 import { getStats, listGallery, listKittens, listProducts } from "@/lib/data";
-import { isSupabaseAdminConfigured } from "@/lib/supabase/admin";
+import { isSupabaseClientConfigured } from "@/lib/supabase/client";
 import { storageIsPersistent } from "@/lib/storage";
 import { Badge } from "@/components/ui/badge";
 
@@ -43,7 +43,7 @@ export default async function AdminDashboardPage() {
     listGallery(),
   ]);
 
-  const databaseReady = isSupabaseAdminConfigured();
+  const databaseReady = isSupabaseClientConfigured();
   const persistentStorage = storageIsPersistent();
 
   const recent = [

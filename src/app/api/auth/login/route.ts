@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { verifyAccessToken } from "@/lib/supabase/admin";
-import { isAdminAuthorized } from "@/lib/supabase/authorization";
+import { getSupabaseServerClient, currentRequestIsAdmin } from "@/lib/supabase/server";
 import { createSessionToken, setSessionCookie } from "@/lib/auth/session";
 import {
   assertSameOrigin,
@@ -16,13 +15,18 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Supabase Authentication login.
+ * Admin login — publishable-key-only Supabase Auth.
  *
- * The client signs in with the Supabase JS SDK (email + password) and posts
- * the resulting access token; the server verifies it against Supabase Auth,
- * confirms the user is an explicitly-authorised admin (active `admins` row),
- * and issues the existing signed httpOnly session cookie used by every
- * guard in the app. Client-supplied roles are never trusted.
+ * 1. The login form signs in with the Supabase JS SDK (email + password).
+ *    @supabase/ssr stores the resulting session in browser cookies, which
+ *    the login request forwards to this route.
+ * 2. The server reads the session from those cookies with the same
+ *    publishable key — Supabase validates the JWT; nothing is trusted from
+ *    the request body (no access token, no role, no isAdmin flag).
+ * 3. Authorization is identity-based: the security-definer RPC
+ *    `is_cattery_admin()` confirms an active `admins` row for auth.uid().
+ * 4. The app's signed httpOnly session cookie is issued for the page/API
+ *    guards, and the Supabase cookies stay for RLS-scoped data access.
  */
 export async function POST(request: Request) {
   if (!assertSameOrigin(request)) return forbidden();
@@ -44,24 +48,29 @@ export async function POST(request: Request) {
     );
   }
 
-  const { email, password, accessToken } = parsed.data;
+  const { email } = parsed.data;
 
   try {
-    if (!accessToken) {
-      // The login form always authenticates with Supabase Auth first; a
-      // password-only POST is only meaningful for the legacy env-admin path,
-      // which no longer exists. Same generic error as a bad credential.
-      return unauthorized("Email or password is incorrect.");
+    const supabase = await getSupabaseServerClient();
+    if (!supabase) {
+      return NextResponse.json(
+        { error: "Authentication is not configured. Contact the site owner." },
+        { status: 503 }
+      );
     }
 
-    const user = await verifyAccessToken(accessToken);
+    // Identity from cookies only — never from the request body.
+    const { data } = await supabase.auth.getUser();
+    const user = data.user;
     if (!user) {
       return unauthorized("Email or password is incorrect.");
     }
 
-    const authorized = await isAdminAuthorized(user.id);
+    const authorized = await currentRequestIsAdmin();
     if (!authorized) {
-      // Valid Supabase user, but not an authorised admin.
+      // Valid Supabase user, but not an authorised admin. Also clear any
+      // half-signed-in session so the browser does not keep it.
+      await supabase.auth.signOut().catch(() => undefined);
       return unauthorized("Email or password is incorrect.");
     }
 
